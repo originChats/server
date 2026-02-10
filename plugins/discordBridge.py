@@ -388,7 +388,7 @@ class DiscordGateway:
                 channel_name
             )
             
-        Logger.success(f"Forwarded Discord message from {rotur_username} to #{channel_name}: '{content}'")
+        Logger.discordupdate(f"Forwarded Discord message from {rotur_username} to #{channel_name}: '{content}'")
         
     async def api_request(self, method, endpoint, data=None):
         """Make Discord API request"""
@@ -699,7 +699,7 @@ def load_origin_channels():
     """Load OriginChats channels from channels.json"""
     try:
         channels_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'db', 'channels.json')
-        with open(channels_path, 'r') as f:
+        with open(channels_path, 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception as e:
         Logger.error(f"Error loading OriginChats channels: {str(e)}")

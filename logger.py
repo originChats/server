@@ -4,6 +4,7 @@ class Colors:
     BOLD = '\033[1m'
     
     # Standard colors
+    DARKGREEN = '\033[32m'
     RED = '\033[91m'
     GREEN = '\033[92m'
     YELLOW = '\033[93m'
@@ -15,7 +16,12 @@ class Colors:
 
 class Logger:
     """Enhanced logger with ANSI colors and symbols"""
-    
+    @staticmethod
+    def distinct(message: str):
+        """Log a distinct message with a unique symbol"""
+        print(f"{Colors.GREEN}[~]{Colors.RESET} {message}")
+
+
     @staticmethod
     def add(message: str):
         """Log an addition/creation action"""
@@ -55,6 +61,11 @@ class Logger:
     def success(message: str):
         """Log success messages"""
         print(f"{Colors.GREEN}[✓]{Colors.RESET} {message}")
+
+    @staticmethod
+    def discordupdate(message: str):
+        """Log Discord update messages"""
+        print(f"{Colors.YELLOW}[☺]{Colors.RESET} {message}")
     
     @staticmethod
     def discord_message(username: str, message: str):
