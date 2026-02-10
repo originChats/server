@@ -75,6 +75,42 @@ def get_channel_messages(channel_name, start, limit):
     
     return channel_data[begin:end]
 
+def convert_messages_to_user_format(messages):
+    """
+    Convert messages with user IDs to messages with usernames for sending to clients.
+    This ensures clients never see user IDs, only usernames.
+    """
+    converted = []
+    for msg in messages:
+        msg_copy = msg.copy()
+        
+        # Convert user ID to username
+        if "user" in msg_copy:
+            user_id = msg_copy["user"]
+            username = users.get_username_by_id(user_id)
+            msg_copy["user"] = username if username else user_id  # Fallback to ID if username not found
+        
+        # Convert reply_to user ID to username if present
+        if "reply_to" in msg_copy and "user" in msg_copy["reply_to"]:
+            user_id = msg_copy["reply_to"]["user"]
+            username = users.get_username_by_id(user_id)
+            msg_copy["reply_to"]["user"] = username if username else user_id  # Fallback to ID if username not found
+        
+        # Convert user IDs in reactions to usernames if present
+        if "reactions" in msg_copy:
+            converted_reactions = {}
+            for emoji, user_ids in msg_copy["reactions"].items():
+                usernames = []
+                for uid in user_ids:
+                    username = users.get_username_by_id(uid)
+                    usernames.append(username if username else uid)  # Fallback to ID if username not found
+                converted_reactions[emoji] = usernames
+            msg_copy["reactions"] = converted_reactions
+        
+        converted.append(msg_copy)
+    
+    return converted
+
 def save_channel_message(channel_name, message):
     """
     Save a message to a specific channel.

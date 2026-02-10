@@ -30,7 +30,7 @@ def get_user(user_id):
     except FileNotFoundError:
         return None
 
-def add_user(user_id):
+def add_user(user_id, username=None):
     """
     Add a new user to the users database.
     """
@@ -43,7 +43,17 @@ def add_user(user_id):
     if user_id in users:
         return False  # User already exists
 
-    users[user_id] = config["DB"]["users"]["default"].copy()
+    # Create user data with username
+    user_data = config["DB"]["users"]["default"].copy()
+    
+    # If username is provided but different from ID (for backward compatibility)
+    # or if user_data already has a username field from legacy data
+    if username:
+        user_data["username"] = username
+    elif "username" not in user_data:
+        user_data["username"] = user_id  # Legacy: ID was username
+    
+    users[user_id] = user_data
 
     with open(users_index, "w") as f:
         json.dump(users, f, indent=4)
@@ -82,8 +92,10 @@ def get_users():
         for user_id, user_data in users.items():
             if "banned" in user_data.get("roles", []):
                 continue
+            # Use username field if available, otherwise fall back to user_id (legacy)
+            username = user_data.get("username", user_id)
             user_arr.append({
-                "username": user_id,
+                "username": username,
                 "roles": user_data.get("roles", []),
                 "color": user_data.get("color")
             })
@@ -117,7 +129,9 @@ def get_banned_users():
         banned_users = []
         for user_id, user_data in users_data.items():
             if "banned" in user_data.get("roles", []):
-                banned_users.append(user_id)
+                # Use username if available, otherwise fall back to ID
+                username = user_data.get("username", user_id)
+                banned_users.append(username)
         
         return banned_users
     except FileNotFoundError:
@@ -191,3 +205,43 @@ def remove_user(user_id):
     except FileNotFoundError:
         return False
     return True
+
+def get_id_by_username(username):
+    """
+    Get a user's ID by their username.
+    """
+    try:
+        with open(users_index, "r") as f:
+            users = json.load(f)
+        
+        username = username.lower()
+        for user_id, user_data in users.items():
+            if user_data.get("username", "").lower() == username:
+                return user_id
+        return None
+    except FileNotFoundError:
+        return None
+
+def get_username_by_id(user_id):
+    """
+    Get a user's username by their ID.
+    """
+    user = get_user(user_id)
+    if user:
+        result = user.get("username", "")
+        # Fallback: if username field is missing, use user_id (for legacy compatibility)
+        if not result or result == "":
+            return user_id
+        return result
+    return user_id  # Fallback to ID if user not found
+
+def update_user_username(user_id, new_username):
+    """
+    Update a user's username. This handles username changes.
+    """
+    user = get_user(user_id)
+    if user:
+        user["username"] = new_username
+        save_user(user_id, user)
+        return True
+    return False

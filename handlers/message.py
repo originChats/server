@@ -32,9 +32,9 @@ def handle(ws, message, server_data=None):
                 channel_name = message.get("channel")
                 content = message.get("content")
                 reply_to = message.get("reply_to")  # Optional: ID of message being replied to
-                user = getattr(ws, 'username', None)
+                user_id = getattr(ws, 'user_id', None)
 
-                if not channel_name or not content or not user:
+                if not channel_name or not content or not user_id:
                     return {"cmd": "error", "val": "Invalid chat message format"}
 
                 content = content.strip()
@@ -48,13 +48,13 @@ def handle(ws, message, server_data=None):
 
                 # Check rate limiting if enabled
                 if server_data and server_data.get("rate_limiter"):
-                    is_allowed, reason, wait_time = server_data["rate_limiter"].is_allowed(user)
+                    is_allowed, reason, wait_time = server_data["rate_limiter"].is_allowed(user_id)
                     if not is_allowed:
                         # Convert wait time to milliseconds and send rate_limit packet
                         wait_time_ms = int(wait_time * 1000)
                         return {"cmd": "rate_limit", "reason": reason, "length": wait_time_ms}
 
-                user_roles = users.get_user_roles(user)
+                user_roles = users.get_user_roles(user_id)
                 if not user_roles:
                     return {"cmd": "error", "val": "User roles not found"}
 
@@ -69,9 +69,9 @@ def handle(ws, message, server_data=None):
                     if not replied_message:
                         return {"cmd": "error", "val": "The message you're trying to reply to was not found"}
 
-                # Save the message to the channel
+                # Save the message to the channel (store user ID)
                 out_msg = {
-                    "user": user,
+                    "user": user_id,
                     "content": content,
                     "timestamp": time.time(),  # Use current timestamp
                     "type": "message",
@@ -88,49 +88,61 @@ def handle(ws, message, server_data=None):
 
                 channels.save_channel_message(channel_name, out_msg)
 
+                # Convert message to user format before sending (user ID -> username)
+                out_msg_for_client = channels.convert_messages_to_user_format([out_msg])[0]
+
+                # Get username for plugin event
+                username = users.get_username_by_id(user_id)
+                
                 # Trigger new_message event for plugins
                 if server_data and "plugin_manager" in server_data:
                     server_data["plugin_manager"].trigger_event("new_message", ws, {
                         "content": content,
                         "channel": channel_name,
-                        "user": user,
+                        "user_id": user_id,
+                        "username": username,
                         "message": out_msg
                     }, server_data)
 
                 # Optionally broadcast to all clients
-                return {"cmd": "message_new", "message": out_msg, "channel": channel_name, "global": True}
+                return {"cmd": "message_new", "message": out_msg_for_client, "channel": channel_name, "global": True}
             case "typing":
                 # Handle typing
-                user = getattr(ws, 'username', None)
-                if not user:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "User not authenticated"}
 
                 # Check rate limiting if enabled
                 if server_data and server_data.get("rate_limiter"):
-                    is_allowed, reason, wait_time = server_data["rate_limiter"].is_allowed(user)
+                    is_allowed, reason, wait_time = server_data["rate_limiter"].is_allowed(user_id)
                     if not is_allowed:
                         # Convert wait time to milliseconds and send rate_limit packet
+                        wait_time_ms = int(wait_time * 1000)
                         return {"cmd": "rate_limit", "reason": reason, "wait_time": wait_time * 1000}
 
                 channel_name = message.get("channel")
                 if not channel_name:
                     return {"cmd": "error", "val": "Channel name not provided"}
                 
+                # Get username for sending to clients
+                username = users.get_username_by_id(user_id)
+                
                 if server_data and "plugin_manager" in server_data:
                     server_data["plugin_manager"].trigger_event("typing", ws, {
-                        "user": user,
+                        "user_id": user_id,
+                        "username": username,
                         "channel": channel_name
                     }, server_data)
 
-                return {"cmd": "typing", "user": user, "channel": channel_name, "global": True}
+                return {"cmd": "typing", "user": username, "channel": channel_name, "global": True}
             case "message_edit":
                 # Handle message edit
-                user = getattr(ws, 'username', None)
-                if not user:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "User not authenticated"}
                 # Check rate limiting if enabled
                 if server_data and server_data.get("rate_limiter"):
-                    is_allowed, reason, wait_time = server_data["rate_limiter"].is_allowed(user)
+                    is_allowed, reason, wait_time = server_data["rate_limiter"].is_allowed(user_id)
                     if not is_allowed:
                         # Convert wait time to milliseconds and send rate_limit packet
                         wait_time_ms = int(wait_time * 1000)
@@ -144,10 +156,10 @@ def handle(ws, message, server_data=None):
                 msg_obj = channels.get_channel_message(channel_name, message_id)
                 if not msg_obj:
                     return {"cmd": "error", "val": "Message not found or cannot be edited"}
-                user_roles = users.get_user_roles(user)
+                user_roles = users.get_user_roles(user_id)
                 if not user_roles:
                     return {"cmd": "error", "val": "User roles not found"}
-                if msg_obj.get("user") == user:
+                if msg_obj.get("user") == user_id:
                     # Editing own message
                     if not channels.can_user_edit_own(channel_name, user_roles):
                         return {"cmd": "error", "val": "You do not have permission to edit your own message in this channel"}
@@ -157,16 +169,24 @@ def handle(ws, message, server_data=None):
                 if not channels.edit_channel_message(channel_name, message_id, new_content):
                     return {"cmd": "error", "val": "Failed to edit message"}
                 if server_data:
+                    username = users.get_username_by_id(user_id)
                     server_data["plugin_manager"].trigger_event("message_edit", ws, {
                         "channel": channel_name,
                         "id": message_id,
-                        "content": new_content
+                        "content": new_content,
+                        "user_id": user_id,
+                        "username": username
                     }, server_data)
-                return {"cmd": "message_edit", "id": message_id, "content": new_content, "channel": channel_name, "global": True}
+                
+                # Get the edited message and convert to user format
+                edited_msg = channels.get_channel_message(channel_name, message_id)
+                if edited_msg:
+                    edited_msg = channels.convert_messages_to_user_format([edited_msg])[0]
+                return {"cmd": "message_edit", "id": message_id, "content": new_content, "message": edited_msg, "channel": channel_name, "global": True}
             case "message_delete":
                 # Handle message delete
-                username = getattr(ws, 'username', None)
-                if not username:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "User not authenticated"}
                 
                 message_id = message.get("id")
@@ -179,12 +199,12 @@ def handle(ws, message, server_data=None):
                 if not message:
                     return {"cmd": "error", "val": "Message not found or cannot be deleted"}
                 
-                user_roles = users.get_user_roles(username)
+                user_roles = users.get_user_roles(user_id)
                 if not user_roles:
                     return {"cmd": "error", "val": "User roles not found"}
                 
 
-                if message.get("user") == username:
+                if message.get("user") == user_id:
                     # User is deleting their own message
                     if not channels.can_user_delete_own(channel_name, user_roles):
                         return {"cmd": "error", "val": "You do not have permission to delete your own message in this channel"}
@@ -195,19 +215,23 @@ def handle(ws, message, server_data=None):
 
                 if not channels.delete_channel_message(channel_name, message_id):
                     return {"cmd": "error", "val": "Failed to delete message"}
+                
+                username = users.get_username_by_id(user_id)
                 if server_data:
                     server_data["plugin_manager"].trigger_event("message_delete", ws, {
                         "channel": channel_name,
-                        "id": message_id
+                        "id": message_id,
+                        "user_id": user_id,
+                        "username": username
                     }, server_data)
                 return {"cmd": "message_delete", "id": message_id, "channel": channel_name, "global": True}
             case "message_pin":
                 # Handle request to pin a message
-                username = getattr(ws, 'username', None)
-                if not username:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "Authentication required"}
 
-                user_roles = users.get_user_roles(username)
+                user_roles = users.get_user_roles(user_id)
                 if not user_roles:
                     return {"cmd": "error", "val": "User roles not found"}
 
@@ -223,20 +247,23 @@ def handle(ws, message, server_data=None):
                     return {"cmd": "error", "val": "Message ID is required"}
 
                 pinned = channels.pin_channel_message(channel_name, message_id)
+                username = users.get_username_by_id(user_id)
                 if server_data:
                     server_data["plugin_manager"].trigger_event("message_pin", ws, {
                         "channel": channel_name,
                         "id": message_id,
-                        "pinned": pinned
+                        "pinned": pinned,
+                        "user_id": user_id,
+                        "username": username
                     }, server_data)
                 return {"cmd": "message_pin", "id": message_id, "channel": channel_name, "pinned": pinned, "global": True}
             case "message_unpin":
                 # Handle request to unpin a message
-                username = getattr(ws, 'username', None)
-                if not username:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "Authentication required"}
 
-                user_roles = users.get_user_roles(username)
+                user_roles = users.get_user_roles(user_id)
                 if not user_roles:
                     return {"cmd": "error", "val": "User roles not found"}
 
@@ -252,11 +279,14 @@ def handle(ws, message, server_data=None):
                     return {"cmd": "error", "val": "Message ID is required"}
 
                 pinned = channels.unpin_channel_message(channel_name, message_id)
+                username = users.get_username_by_id(user_id)
                 if server_data:
                     server_data["plugin_manager"].trigger_event("message_unpin", ws, {
                         "channel": channel_name,
                         "id": message_id,
-                        "pinned": pinned
+                        "pinned": pinned,
+                        "user_id": user_id,
+                        "username": username
                     }, server_data)
                 return {"cmd": "message_unpin", "id": message_id, "channel": channel_name, "pinned": pinned, "global": True}
             case "messages_pinned":
@@ -265,11 +295,11 @@ def handle(ws, message, server_data=None):
                 if not channel_name:
                     return {"cmd": "error", "val": "Channel name not provided"}
                 
-                username = getattr(ws, 'username', None)
-                if not username:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "User not authenticated"}
                 
-                user_data = users.get_user(username)
+                user_data = users.get_user(user_id)
                 if not user_data:
                     return {"cmd": "error", "val": "User not found"}
                 
@@ -280,6 +310,8 @@ def handle(ws, message, server_data=None):
                     return {"cmd": "error", "val": "Access denied to this channel"}
 
                 pinned_messages = channels.get_pinned_messages(channel_name)
+                # Convert user IDs to usernames before sending
+                pinned_messages = channels.convert_messages_to_user_format(pinned_messages)
                 return {"cmd": "messages_pinned", "channel": channel_name, "messages": pinned_messages}
             case "messages_search":
                 # Handle request for search results in a channel
@@ -288,11 +320,11 @@ def handle(ws, message, server_data=None):
                 if not channel_name or not query:
                     return {"cmd": "error", "val": "Channel name and query are required"}
                 
-                username = getattr(ws, 'username', None)
-                if not username:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "User not authenticated"}
                 
-                user_data = users.get_user(username)
+                user_data = users.get_user(user_id)
                 if not user_data:
                     return {"cmd": "error", "val": "User not found"}
                 
@@ -303,14 +335,16 @@ def handle(ws, message, server_data=None):
                     return {"cmd": "error", "val": "Access denied to this channel"}
 
                 search_results = channels.search_channel_messages(channel_name, query)
+                # Convert user IDs to usernames before sending
+                search_results = channels.convert_messages_to_user_format(search_results)
                 return {"cmd": "messages_search", "channel": channel_name, "query": query, "results": search_results}
             case "message_react_add":
                 # Handle request to add a reaction to a message
-                username = getattr(ws, 'username', None)
-                if not username:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "Authentication required"}
 
-                user_roles = users.get_user_roles(username)
+                user_roles = users.get_user_roles(user_id)
                 if not user_roles:
                     return {"cmd": "error", "val": "User roles not found"}
 
@@ -327,18 +361,20 @@ def handle(ws, message, server_data=None):
                 if not emoji:
                     return {"cmd": "error", "val": "Emoji is required"}
 
-                if not channels.add_reaction(channel_name, message_id, emoji, username):
+                # Store user ID, but send username to clients
+                username = users.get_username_by_id(user_id)
+                if not channels.add_reaction(channel_name, message_id, emoji, user_id):
                     return {"cmd": "error", "val": "Failed to add reaction"}
                 return {"cmd": "message_react_add", "id": message_id, "emoji": emoji, "channel": channel_name, "from": username, "global": True}
             case "message_react_remove":
                 # Handle request to remove a reaction from a message
-                username = getattr(ws, 'username', None)
-                if not username:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "Authentication required"}
 
                 channel_name = message.get("channel")
 
-                user_roles = users.get_user_roles(username)
+                user_roles = users.get_user_roles(user_id)
                 if not user_roles:
                     return {"cmd": "error", "val": "User roles not found"}
 
@@ -354,7 +390,9 @@ def handle(ws, message, server_data=None):
                 if not emoji:
                     return {"cmd": "error", "val": "Emoji is required"}
 
-                if not channels.remove_reaction(channel_name, message_id, emoji, username):
+                # Store user ID, but send username to clients
+                username = users.get_username_by_id(user_id)
+                if not channels.remove_reaction(channel_name, message_id, emoji, user_id):
                     return {"cmd": "error", "val": "Failed to remove reaction"}
                 return {"cmd": "message_react_remove", "id": message_id, "emoji": emoji, "channel": channel_name, "from": username, "global": True}
             case "messages_get":
@@ -366,11 +404,11 @@ def handle(ws, message, server_data=None):
                 if not channel_name:
                     return {"cmd": "error", "val": "Invalid channel name"}
 
-                username = getattr(ws, 'username', None)
-                if not username:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "User not authenticated"}
 
-                user_data = users.get_user(username)
+                user_data = users.get_user(user_id)
                 if not user_data:
                     return {"cmd": "error", "val": "User not found"}
 
@@ -381,6 +419,8 @@ def handle(ws, message, server_data=None):
                     return {"cmd": "error", "val": "Access denied to this channel"}
 
                 messages = channels.get_channel_messages(channel_name, start, limit)
+                # Convert user IDs to usernames before sending
+                messages = channels.convert_messages_to_user_format(messages)
                 return {"cmd": "messages_get", "channel": channel_name, "messages": messages}
             case "message_get":
                 # Handle request for a specific message by ID
@@ -390,11 +430,11 @@ def handle(ws, message, server_data=None):
                 if not channel_name or not message_id:
                     return {"cmd": "error", "val": "Channel name and message ID are required"}
 
-                username = getattr(ws, 'username', None)
-                if not username:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "User not authenticated"}
 
-                user_data = users.get_user(username)
+                user_data = users.get_user(user_id)
                 if not user_data:
                     return {"cmd": "error", "val": "User not found"}
 
@@ -409,6 +449,8 @@ def handle(ws, message, server_data=None):
                 if not msg:
                     return {"cmd": "error", "val": "Message not found"}
 
+                # Convert user ID to username before sending
+                msg = channels.convert_messages_to_user_format([msg])[0]
                 return {"cmd": "message_get", "channel": channel_name, "message": msg}
             case "message_replies":
                 # Handle request for replies to a specific message
@@ -419,11 +461,11 @@ def handle(ws, message, server_data=None):
                 if not channel_name or not message_id:
                     return {"cmd": "error", "val": "Channel name and message ID are required"}
 
-                username = getattr(ws, 'username', None)
-                if not username:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "User not authenticated"}
 
-                user_data = users.get_user(username)
+                user_data = users.get_user(user_id)
                 if not user_data:
                     return {"cmd": "error", "val": "User not found"}
 
@@ -435,25 +477,27 @@ def handle(ws, message, server_data=None):
 
                 # Get replies to the message
                 replies = channels.get_message_replies(channel_name, message_id, limit)
+                # Convert user IDs to usernames before sending
+                replies = channels.convert_messages_to_user_format(replies)
                 return {"cmd": "message_replies", "channel": channel_name, "message_id": message_id, "replies": replies}
             case "channels_get":
                 # Handle request for available channels
-                username = getattr(ws, 'username', None)
-                if not username:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "User not authenticated"}
                     
-                user_data = users.get_user(username)  # Ensure user exists
+                user_data = users.get_user(user_id)  # Ensure user exists
                 if not user_data:
                     return {"cmd": "error", "val": "User not found"}
                 channels_list = channels.get_all_channels_for_roles(user_data.get("roles", []))
                 return {"cmd": "channels_get", "val": channels_list}
             case "user_timeout":
                 # Handle request to set timeout for a user
-                username = getattr(ws, 'username', None)
-                if not username:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "Authentication required"}
 
-                user_roles = users.get_user_roles(username)
+                user_roles = users.get_user_roles(user_id)
                 if not user_roles or "owner" not in user_roles:
                     return {"cmd": "error", "val": "Access denied: owner role required"}
 
@@ -472,12 +516,15 @@ def handle(ws, message, server_data=None):
                 if not target:
                     return {"cmd": "error", "val": "User parameter is required"}
 
+                # Try to resolve username to user ID
+                target_id = users.get_id_by_username(target) or target
+
                 if server_data and server_data.get("rate_limiter") and server_data.get("connected_clients"):
-                    server_data["rate_limiter"].set_user_timeout(target, timeout)
+                    server_data["rate_limiter"].set_user_timeout(target_id, timeout)
                     clients = server_data["connected_clients"]
                     user_ws = None
                     for ws in clients:
-                        if getattr(ws, "username", None) == target:
+                        if getattr(ws, "user_id", None) == target_id:
                             user_ws = ws
                             break
                     if user_ws:
@@ -487,68 +534,90 @@ def handle(ws, message, server_data=None):
                             "length": timeout * 1000
                         }))
                     server_data["plugin_manager"].trigger_event("user_timeout", ws, {
-                        "username": target,
+                        "user_id": target_id,
+                        "username": users.get_username_by_id(target_id),
                         "timeout": timeout * 1000,
                     }, server_data)
                 return {"cmd": "user_timeout", "user": target, "timeout": timeout}
             case "user_ban":
                 # Handle request to ban a user
-                username = getattr(ws, 'username', None)
-                if not username:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "Authentication required"}
 
-                user_roles = users.get_user_roles(username)
+                user_roles = users.get_user_roles(user_id)
                 if not user_roles or "owner" not in user_roles:
                     return {"cmd": "error", "val": "Access denied: owner role required"}
 
-                banned = users.ban_user(username)
+                target = message.get("user")
+                if not target:
+                    return {"cmd": "error", "val": "User parameter is required"}
+
+                # Try to resolve username to user ID
+                target_id = users.get_id_by_username(target) or target
+
+                banned = users.ban_user(target_id)
                 if server_data:
                     server_data["plugin_manager"].trigger_event("user_ban", ws, {
-                        "username": username
+                        "user_id": target_id,
+                        "username": users.get_username_by_id(target_id)
                     }, server_data)
-                return {"cmd": "user_ban", "user": username, "banned": banned}
+                # Return username for display purposes
+                return {"cmd": "user_ban", "user": users.get_username_by_id(target_id), "banned": banned}
             case "user_unban":
                 # Handle request to unban a user
-                username = getattr(ws, 'username', None)
-                if not username:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "Authentication required"}
 
-                user_roles = users.get_user_roles(username)
+                user_roles = users.get_user_roles(user_id)
                 if not user_roles or "owner" not in user_roles:
                     return {"cmd": "error", "val": "Access denied: owner role required"}
 
-                unbanned = users.unban_user(username)
+                target = message.get("user")
+                if not target:
+                    return {"cmd": "error", "val": "User parameter is required"}
+
+                # Try to resolve username to user ID
+                target_id = users.get_id_by_username(target) or target
+
+                unbanned = users.unban_user(target_id)
                 if server_data:
                     server_data["plugin_manager"].trigger_event("user_unban", ws, {
-                        "username": username
+                        "user_id": target_id,
+                        "username": users.get_username_by_id(target_id)
                     }, server_data)
-                return {"cmd": "user_unban", "user": username, "unbanned": unbanned}
+                # Return username for display purposes
+                return {"cmd": "user_unban", "user": users.get_username_by_id(target_id), "unbanned": unbanned}
             case "user_leave":
-                username = getattr(ws, 'username', None)
-                if not username:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "Authentication required"}
                 
                 if not server_data or "connected_clients" not in server_data:
                     return {"cmd": "error", "val": "Server data not available"}
                 
-                server_data["connected_clients"].remove(ws)
-                users.remove_user(username)
+                username = users.get_username_by_id(user_id)
+                
+                server_data["connected_clients"].discard(ws)  # Use discard instead of remove to avoid KeyError
+                users.remove_user(user_id)
                 server_data["plugin_manager"].trigger_event("user_left", ws, {
+                    "user_id": user_id,
                     "username": username
                 }, server_data)
                 return {"cmd": "user_leave", "user": username, "val": "User left server", "global": True}
             case "users_list":
                 # Handle request for all users list
-                username = getattr(ws, 'username', None)
-                if not username:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "User not authenticated"}
                 
                 users_list = users.get_users()
                 return {"cmd": "users_list", "users": users_list}
             case "users_online":
                 # Handle request for online users list  
-                username = getattr(ws, 'username', None)
-                if not username:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "User not authenticated"}
                 
                 if not server_data or "connected_clients" not in server_data:
@@ -558,7 +627,10 @@ def handle(ws, message, server_data=None):
                 online_users = []
                 for client_ws in server_data["connected_clients"]:
                     if getattr(client_ws, "authenticated", False):
-                        user_data = users.get_user(client_ws.username)
+                        client_user_id = getattr(client_ws, 'user_id', None)
+                        if not client_user_id:
+                            continue
+                        user_data = users.get_user(client_user_id)
                         if not user_data:
                             continue
                         
@@ -571,8 +643,10 @@ def handle(ws, message, server_data=None):
                             if first_role_data:
                                 color = first_role_data.get("color")
                         
+                        # Use the username from user data (which supports username changes)
+                        username = user_data.get("username", client_user_id)
                         online_users.append({
-                            "username": client_ws.username,
+                            "username": username,
                             "roles": user_data.get("roles"),
                             "color": color
                         })
@@ -580,11 +654,11 @@ def handle(ws, message, server_data=None):
                 return {"cmd": "users_online", "users": online_users}
             case "plugins_list":
                 # Handle request for loaded plugins (admin only)
-                username = getattr(ws, 'username', None)
-                if not username:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "User not authenticated"}
                 
-                user_roles = users.get_user_roles(username)
+                user_roles = users.get_user_roles(user_id)
                 if not user_roles or "owner" not in user_roles:
                     return {"cmd": "error", "val": "Access denied: owner role required"}
                 
@@ -595,11 +669,11 @@ def handle(ws, message, server_data=None):
                 return {"cmd": "plugins_list", "plugins": plugins}
             case "plugins_reload":
                 # Handle request to reload plugins (admin only)
-                username = getattr(ws, 'username', None)
-                if not username:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "User not authenticated"}
                 
-                user_roles = users.get_user_roles(username)
+                user_roles = users.get_user_roles(user_id)
                 if not user_roles or "owner" not in user_roles:
                     return {"cmd": "error", "val": "Access denied: owner role required"}
                 
@@ -620,29 +694,33 @@ def handle(ws, message, server_data=None):
                     return {"cmd": "plugins_reload", "val": "All plugins reloaded successfully"}
             case "rate_limit_status":
                 # Handle request for rate limit status (admin or self)
-                username = getattr(ws, 'username', None)
-                if not username:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "User not authenticated"}
                 
-                target_user = message.get("user", username)  # Default to self
-                user_roles = users.get_user_roles(username)
+                target_user = message.get("user", user_id)  # Default to self
+                # Resolve username to ID if needed
+                target_id = users.get_id_by_username(target_user) or target_user
+                user_roles = users.get_user_roles(user_id)
                 
                 # Allow users to check their own status, or admins to check anyone's
-                if target_user != username and (not user_roles or "owner" not in user_roles):
+                if target_id != user_id and (not user_roles or "owner" not in user_roles):
                     return {"cmd": "error", "val": "Access denied: can only check your own rate limit status"}
                 
                 if not server_data or not server_data.get("rate_limiter"):
                     return {"cmd": "error", "val": "Rate limiter not available or disabled"}
                 
-                status = server_data["rate_limiter"].get_user_status(target_user)
-                return {"cmd": "rate_limit_status", "user": target_user, "status": status}
+                status = server_data["rate_limiter"].get_user_status(target_id)
+                # Return username for display
+                status_username = users.get_username_by_id(target_id)
+                return {"cmd": "rate_limit_status", "user": status_username, "status": status}
             case "rate_limit_reset":
                 # Handle request to reset rate limit for a user (admin only)
-                username = getattr(ws, 'username', None)
-                if not username:
+                user_id = getattr(ws, 'user_id', None)
+                if not user_id:
                     return {"cmd": "error", "val": "User not authenticated"}
                 
-                user_roles = users.get_user_roles(username)
+                user_roles = users.get_user_roles(user_id)
                 if not user_roles or "owner" not in user_roles:
                     return {"cmd": "error", "val": "Access denied: owner role required"}
                 
@@ -650,11 +728,15 @@ def handle(ws, message, server_data=None):
                 if not target_user:
                     return {"cmd": "error", "val": "User parameter is required"}
                 
+                # Resolve username to ID if needed
+                target_id = users.get_id_by_username(target_user) or target_user
+                target_display = users.get_username_by_id(target_id)
+                
                 if not server_data or not server_data.get("rate_limiter"):
                     return {"cmd": "error", "val": "Rate limiter not available or disabled"}
                 
-                server_data["rate_limiter"].reset_user(target_user)
-                return {"cmd": "rate_limit_reset", "user": target_user, "val": f"Rate limit reset for user {target_user}"}
+                server_data["rate_limiter"].reset_user(target_id)
+                return {"cmd": "rate_limit_reset", "user": target_display, "val": f"Rate limit reset for user {target_display}"}
             case _:
                 return {"cmd": "error", "val": f"Unknown command: {message.get('cmd')}"}
     # except Exception as e:

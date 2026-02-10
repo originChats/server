@@ -138,9 +138,10 @@ class OriginChatsServer:
                 Logger.delete(f"Client {client_ip} removed. {len(self.connected_clients)} clients remaining")
                 
                 if getattr(websocket, "authenticated", False):
+                    username = getattr(websocket, "username", "")
                     await broadcast_to_all(self.connected_clients, {
                         "cmd": "user_disconnect",
-                        "username": websocket.username
+                        "username": username
                     })
     
     async def broadcast_wrapper(self, message):

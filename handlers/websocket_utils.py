@@ -62,12 +62,12 @@ async def broadcast_to_channel(connected_clients, message, channel_name):
         if not getattr(ws, 'authenticated', False):
             continue
             
-        username = getattr(ws, 'username', None)
-        if not username:
+        user_id = getattr(ws, 'user_id', None)
+        if not user_id:
             continue
             
         # Get user roles
-        user_data = users.get_user(username)
+        user_data = users.get_user(user_id)
         if not user_data:
             continue
             
@@ -90,20 +90,30 @@ async def broadcast_to_channel(connected_clients, message, channel_name):
     
     return disconnected
 
-async def disconnect_user(connected_clients, username, reason="User disconnected"):
-    """Disconnect a specific user by username"""
+async def disconnect_user(connected_clients, identifier, reason="User disconnected"):
+    """Disconnect a specific user by username or user ID"""
+    from db import users
+    
     disconnected = []
     clients_copy = connected_clients.copy()
     
+    # Try to get user ID if username is provided
+    target_user_id = identifier
+    if identifier and not identifier.startswith(("USR:", "usr_")):  # Likely a username
+        lookup_user_id = users.get_id_by_username(identifier)
+        if lookup_user_id:
+            target_user_id = lookup_user_id
+    
     for ws in clients_copy:
-        if hasattr(ws, 'username') and ws.username == username:
+        ws_user_id = getattr(ws, 'user_id', None)
+        if hasattr(ws, 'username') and (ws.username == identifier or ws_user_id == target_user_id):
             try:
                 await send_to_client(ws, {"cmd": "disconnect", "reason": reason})
                 await ws.close()
                 disconnected.append(ws)
-                Logger.delete(f"Disconnected user {username}: {reason}")
+                Logger.delete(f"Disconnected user {identifier}: {reason}")
             except Exception as e:
-                Logger.error(f"Error disconnecting user {username}: {str(e)}")
+                Logger.error(f"Error disconnecting user {identifier}: {str(e)}")
                 disconnected.append(ws)
     
     # Clean up disconnected clients

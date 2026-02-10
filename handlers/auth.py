@@ -19,33 +19,46 @@ async def handle_authentication(websocket, data, config_data, connected_clients,
         Logger.error(f"Client {client_ip} failed authentication")
         return False
 
-    # Set authentication state
+    # Extract user ID and username from API response
+    api_response = response.json()
+    user_id = api_response.get("id", "")
+    username = api_response.get("username", "")
+    
+    # Set authentication state with both ID and username
     websocket.authenticated = True
-    websocket.username = validator.split(",")[0].lower()  # Extract username from validator
+    websocket.user_id = user_id
+    websocket.username = username
 
     # Check if user is banned
-    if users.is_user_banned(websocket.username):
+    if users.is_user_banned(user_id):
         await send_to_client(websocket, {"cmd": "auth_error", "val": "Access denied: You are banned from this server"})
-        Logger.warning(f"Banned user {websocket.username} attempted to connect from {client_ip}")
+        Logger.warning(f"Banned user {username} (ID: {user_id}) attempted to connect from {client_ip}")
         websocket.authenticated = False
         return False
 
     # Create user if doesn't exist
-    if not users.user_exists(websocket.username):
-        users.add_user(websocket.username)
-        Logger.add(f"User {websocket.username} created")
+    if not users.user_exists(user_id):
+        users.add_user(user_id, username)
+        Logger.add(f"User {username} (ID: {user_id}) created")
+    
+    # Update username if it has changed
+    existing_user = users.get_user(user_id)
+    if existing_user and existing_user.get("username") != username:
+        users.update_user_username(user_id, username)
+        Logger.add(f"Updated username for ID {user_id} to {username}")
 
     # Send success message
     await send_to_client(websocket, {"cmd": "auth_success", "val": "Authentication successful"})
     
     # Get user data and send ready packet
-    user = users.get_user(websocket.username)
+    user = users.get_user(user_id)
     if not user:
         await send_to_client(websocket, {"cmd": "auth_error", "val": "User not found"})
-        Logger.error(f"User {websocket.username} not found after authentication")
+        Logger.error(f"User {username} (ID: {user_id}) not found after authentication")
         return False
 
-    user["username"] = websocket.username
+    # Ensure username is set in user data
+    user["username"] = username
     await send_to_client(websocket, {
         "cmd": "ready",
         "user": user
@@ -60,11 +73,11 @@ async def handle_authentication(websocket, data, config_data, connected_clients,
         if first_role_data:
             color = first_role_data.get("color")
     
-    # Broadcast user connection to all clients
+    # Broadcast user connection to all clients (send username, not ID)
     await broadcast_to_all(connected_clients, {
         "cmd": "user_connect",
         "user": {
-            "username": websocket.username,
+            "username": username,
             "roles": user.get("roles"),
             "color": color
         }
@@ -73,11 +86,12 @@ async def handle_authentication(websocket, data, config_data, connected_clients,
     # Trigger user_connect event for plugins
     if server_data and "plugin_manager" in server_data:
         server_data["plugin_manager"].trigger_event("user_connect", websocket, {
-            "username": websocket.username,
+            "username": username,
+            "user_id": user_id,
             "roles": user.get("roles"),
             "color": color,
             "user": user
         }, server_data)
     
-    Logger.success(f"Client {client_ip} authenticated")
+    Logger.success(f"Client {client_ip} authenticated as {username} (ID: {user_id})")
     return True
