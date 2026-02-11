@@ -8,6 +8,7 @@ import time
 import uuid
 import asyncio
 import aiohttp
+import websocket
 import websockets
 import hashlib
 from typing import Dict, List, Optional
@@ -333,7 +334,7 @@ class DiscordGateway:
         discord_user_id = author['id']
         rotur_username = await get_rotur_username(discord_user_id)
         if not rotur_username:
-            rotur_username = f"discord-{author['username'].lower()}"
+            rotur_username = getattr(websocket, "username", "")
         else:
             rotur_username = rotur_username.lower()
         

@@ -69,9 +69,9 @@ def handle(ws, message, server_data=None):
                     if not replied_message:
                         return {"cmd": "error", "val": "The message you're trying to reply to was not found"}
 
-                # Save the message to the channel (store user ID)
+                # Save the message to the channel (store username, not user ID)
                 out_msg = {
-                    "user": user_id,
+                    "user": users.get_username_by_id(user_id),
                     "content": content,
                     "timestamp": time.time(),  # Use current timestamp
                     "type": "message",
