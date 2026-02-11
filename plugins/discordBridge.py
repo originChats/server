@@ -710,7 +710,7 @@ def load_webhook_config():
     """Load webhook configuration from file"""
     try:
         if os.path.exists(WEBHOOK_CONFIG_FILE):
-            with open(WEBHOOK_CONFIG_FILE, 'r') as f:
+            with open(WEBHOOK_CONFIG_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
     except Exception as e:
         Logger.error(f"Error loading webhook config: {str(e)}")
@@ -721,7 +721,7 @@ def save_webhook_config(channel_name, webhook_url):
     try:
         config = load_webhook_config()
         config[channel_name] = webhook_url
-        with open(WEBHOOK_CONFIG_FILE, 'w') as f:
+        with open(WEBHOOK_CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=2)
     except Exception as e:
         Logger.error(f"Error saving webhook config: {str(e)}")

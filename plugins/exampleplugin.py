@@ -42,3 +42,27 @@ def send_message_to_channel(channel, content, server_data):
 # ---------------------------------------------------------------------------------------------------------------- #
 send_message_to_channel("general", "Example Plugin has been loaded!", None)
 
+
+def getInfo():
+    return {
+        "name": "Example Plugin",
+        "description": "Simple example plugin that responds to ?hello",
+        "version": "1.0.0",
+        "author": "OriginChats",
+        "handles": ["new_message"]
+    }
+
+
+def on_new_message(ws, message_data, server_data=None):
+    try:
+        content = message_data.get('content', '').strip()
+        channel = message_data.get('channel')
+        if not content or not channel:
+            return
+
+        if content.lower() == '?rtd':
+            # Use the helper to send a message into the channel
+            send_message_to_channel(channel, 'Hello World', server_data)
+    except Exception as e:
+        Logger.error(f"ExamplePlugin on_new_message error: {e}")
+
