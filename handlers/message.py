@@ -785,10 +785,6 @@ def handle(ws, message, server_data=None):
                 if not server_data:
                     return {"cmd": "error", "val": "No server data provided"}
                 
-                commands = message.get("commands")
-                if not commands or not isinstance(commands, list):
-                    return {"cmd": "error", "val": "Commands must be provided as a list"}
-                
                 command_lines = []
                 for cmd in server_data["slash_commands"].values():
                     options_str = (
