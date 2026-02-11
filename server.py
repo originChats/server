@@ -21,6 +21,7 @@ class OriginChatsServer:
         self.heartbeat_interval = 30
         self.main_event_loop = None
         self.file_observer = None
+        self.slash_commands = {}
         
         # Initialize rate limiter if enabled
         rate_config = self.config.get("rate_limiting", {})
@@ -99,7 +100,8 @@ class OriginChatsServer:
                         "config": self.config,
                         "plugin_manager": self.plugin_manager,
                         "rate_limiter": self.rate_limiter,
-                        "send_to_client": send_to_client
+                        "send_to_client": send_to_client,
+                        "slash_commands": self.slash_commands
                     }
                     
                     # Handle message

@@ -2,6 +2,55 @@ from db import channels, users, roles
 import time, uuid, sys, os, asyncio
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logger import Logger
+from pydantic import ValidationError
+from schemas.slash_command_schema import SlashCommand
+
+
+def _require_user_id(ws, error_message = "User not authenticated"):
+    user_id = getattr(ws, "user_id", None)
+    if not user_id:
+        return None, {"cmd": "error", "val": error_message}
+    return user_id, None
+
+def _require_user_roles(user_id, *, requiredRoles = [], forbiddenRoles = [], missing_roles_message = "User roles not found"):
+    user_roles = users.get_user_roles(user_id)
+    for role in requiredRoles:
+        if not user_roles or role not in user_roles:
+            return None, {"cmd": "error", "val": f"Access denied: '{role}' role required"}
+
+    if not user_roles:
+        return None, {"cmd": "error", "val": missing_roles_message}
+    return user_roles, None
+
+def _require_text_channel_access(user_id, channel_name):
+    if not channel_name:
+        return None, {"cmd": "error", "val": "Channel name not provided"}
+
+    user_data = users.get_user(user_id)
+    if not user_data:
+        return None, {"cmd": "error", "val": "User not found"}
+
+    allowed_channels = channels.get_all_channels_for_roles(user_data.get("roles", []))
+    allowed_text_channel_names = [channel.get("name") for channel in allowed_channels if channel.get("type") == "text"]
+    if channel_name not in allowed_text_channel_names:
+        return None, {"cmd": "error", "val": "Access denied to this channel"}
+
+    return user_data, None
+
+def _validate_type(value, expected_type):
+    match expected_type:
+        case "string":
+            return isinstance(value, str)
+        case "int":
+            return isinstance(value, int)
+        case "float":
+            return isinstance(value, (int, float))
+        case "bool":
+            return isinstance(value, bool)
+        case _:
+            return False
+
+
 
 def handle(ws, message, server_data=None):
     """
@@ -108,9 +157,9 @@ def handle(ws, message, server_data=None):
                 return {"cmd": "message_new", "message": out_msg_for_client, "channel": channel_name, "global": True}
             case "typing":
                 # Handle typing
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "User not authenticated"}
+                user_id, error = _require_user_id(ws)
+                if error:
+                    return error
 
                 # Check rate limiting if enabled
                 if server_data and server_data.get("rate_limiter"):
@@ -137,9 +186,9 @@ def handle(ws, message, server_data=None):
                 return {"cmd": "typing", "user": username, "channel": channel_name, "global": True}
             case "message_edit":
                 # Handle message edit
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "User not authenticated"}
+                user_id, error = _require_user_id(ws)
+                if error:
+                    return error
                 # Check rate limiting if enabled
                 if server_data and server_data.get("rate_limiter"):
                     is_allowed, reason, wait_time = server_data["rate_limiter"].is_allowed(user_id)
@@ -156,9 +205,9 @@ def handle(ws, message, server_data=None):
                 msg_obj = channels.get_channel_message(channel_name, message_id)
                 if not msg_obj:
                     return {"cmd": "error", "val": "Message not found or cannot be edited"}
-                user_roles = users.get_user_roles(user_id)
-                if not user_roles:
-                    return {"cmd": "error", "val": "User roles not found"}
+                user_roles, error = _require_user_roles(user_id)
+                if error:
+                    return error
                 if msg_obj.get("user") == user_id:
                     # Editing own message
                     if not channels.can_user_edit_own(channel_name, user_roles):
@@ -185,9 +234,9 @@ def handle(ws, message, server_data=None):
                 return {"cmd": "message_edit", "id": message_id, "content": new_content, "message": edited_msg, "channel": channel_name, "global": True}
             case "message_delete":
                 # Handle message delete
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "User not authenticated"}
+                user_id, error = _require_user_id(ws)
+                if error:
+                    return error
                 
                 message_id = message.get("id")
                 channel_name = message.get("channel")
@@ -199,9 +248,9 @@ def handle(ws, message, server_data=None):
                 if not message:
                     return {"cmd": "error", "val": "Message not found or cannot be deleted"}
                 
-                user_roles = users.get_user_roles(user_id)
-                if not user_roles:
-                    return {"cmd": "error", "val": "User roles not found"}
+                user_roles, error = _require_user_roles(user_id)
+                if error:
+                    return error
                 
 
                 if message.get("user") == user_id:
@@ -227,13 +276,13 @@ def handle(ws, message, server_data=None):
                 return {"cmd": "message_delete", "id": message_id, "channel": channel_name, "global": True}
             case "message_pin":
                 # Handle request to pin a message
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "Authentication required"}
+                user_id, error = _require_user_id(ws, "Authentication required")
+                if error:
+                    return error
 
-                user_roles = users.get_user_roles(user_id)
-                if not user_roles:
-                    return {"cmd": "error", "val": "User roles not found"}
+                user_roles, error = _require_user_roles(user_id)
+                if error:
+                    return error
 
                 channel_name = message.get("channel")
                 if not channel_name:
@@ -259,13 +308,13 @@ def handle(ws, message, server_data=None):
                 return {"cmd": "message_pin", "id": message_id, "channel": channel_name, "pinned": pinned, "global": True}
             case "message_unpin":
                 # Handle request to unpin a message
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "Authentication required"}
+                user_id, error = _require_user_id(ws, "Authentication required")
+                if error:
+                    return error
 
-                user_roles = users.get_user_roles(user_id)
-                if not user_roles:
-                    return {"cmd": "error", "val": "User roles not found"}
+                user_roles, error = _require_user_roles(user_id)
+                if error:
+                    return error
 
                 channel_name = message.get("channel")
                 if not channel_name:
@@ -295,19 +344,12 @@ def handle(ws, message, server_data=None):
                 if not channel_name:
                     return {"cmd": "error", "val": "Channel name not provided"}
                 
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "User not authenticated"}
-                
-                user_data = users.get_user(user_id)
-                if not user_data:
-                    return {"cmd": "error", "val": "User not found"}
-                
-                # Check if user can see this channel
-                allowed_channels = channels.get_all_channels_for_roles(user_data.get("roles", []))
-
-                if channel_name not in [c.get("name") for c in allowed_channels if c.get("type") == "text"]:
-                    return {"cmd": "error", "val": "Access denied to this channel"}
+                user_id, error = _require_user_id(ws)
+                if error:
+                    return error
+                _, error = _require_text_channel_access(user_id, channel_name)
+                if error:
+                    return error
 
                 pinned_messages = channels.get_pinned_messages(channel_name)
                 # Convert user IDs to usernames before sending
@@ -320,19 +362,12 @@ def handle(ws, message, server_data=None):
                 if not channel_name or not query:
                     return {"cmd": "error", "val": "Channel name and query are required"}
                 
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "User not authenticated"}
-                
-                user_data = users.get_user(user_id)
-                if not user_data:
-                    return {"cmd": "error", "val": "User not found"}
-                
-                # Check if user can see this channel
-                allowed_channels = channels.get_all_channels_for_roles(user_data.get("roles", []))
-
-                if channel_name not in [c.get("name") for c in allowed_channels if c.get("type") == "text"]:
-                    return {"cmd": "error", "val": "Access denied to this channel"}
+                user_id, error = _require_user_id(ws)
+                if error:
+                    return error
+                _, error = _require_text_channel_access(user_id, channel_name)
+                if error:
+                    return error
 
                 search_results = channels.search_channel_messages(channel_name, query)
                 # Convert user IDs to usernames before sending
@@ -340,13 +375,13 @@ def handle(ws, message, server_data=None):
                 return {"cmd": "messages_search", "channel": channel_name, "query": query, "results": search_results}
             case "message_react_add":
                 # Handle request to add a reaction to a message
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "Authentication required"}
+                user_id, error = _require_user_id(ws, "Authentication required")
+                if error:
+                    return error
 
-                user_roles = users.get_user_roles(user_id)
-                if not user_roles:
-                    return {"cmd": "error", "val": "User roles not found"}
+                user_roles, error = _require_user_roles(user_id)
+                if error:
+                    return error
 
                 channel_name = message.get("channel")
                 # Check if the user has permission to add reactions
@@ -368,15 +403,15 @@ def handle(ws, message, server_data=None):
                 return {"cmd": "message_react_add", "id": message_id, "emoji": emoji, "channel": channel_name, "from": username, "global": True}
             case "message_react_remove":
                 # Handle request to remove a reaction from a message
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "Authentication required"}
+                user_id, error = _require_user_id(ws, "Authentication required")
+                if error:
+                    return error
 
                 channel_name = message.get("channel")
 
-                user_roles = users.get_user_roles(user_id)
-                if not user_roles:
-                    return {"cmd": "error", "val": "User roles not found"}
+                user_roles, error = _require_user_roles(user_id)
+                if error:
+                    return error
 
                 # Check if the user has permission to remove reactions
                 if not channels.can_user_react(channel_name, user_roles):
@@ -404,19 +439,12 @@ def handle(ws, message, server_data=None):
                 if not channel_name:
                     return {"cmd": "error", "val": "Invalid channel name"}
 
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "User not authenticated"}
-
-                user_data = users.get_user(user_id)
-                if not user_data:
-                    return {"cmd": "error", "val": "User not found"}
-
-                # Check if user can see this channel
-                allowed_channels = channels.get_all_channels_for_roles(user_data.get("roles", []))
-
-                if channel_name not in [c.get("name") for c in allowed_channels if c.get("type") == "text"]:
-                    return {"cmd": "error", "val": "Access denied to this channel"}
+                user_id, error = _require_user_id(ws)
+                if error:
+                    return error
+                _, error = _require_text_channel_access(user_id, channel_name)
+                if error:
+                    return error
 
                 messages = channels.get_channel_messages(channel_name, start, limit)
                 # Convert user IDs to usernames before sending
@@ -430,19 +458,12 @@ def handle(ws, message, server_data=None):
                 if not channel_name or not message_id:
                     return {"cmd": "error", "val": "Channel name and message ID are required"}
 
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "User not authenticated"}
-
-                user_data = users.get_user(user_id)
-                if not user_data:
-                    return {"cmd": "error", "val": "User not found"}
-
-                # Check if user can see this channel
-                allowed_channels = channels.get_all_channels_for_roles(user_data.get("roles", []))
-
-                if channel_name not in [c.get("name") for c in allowed_channels if c.get("type") == "text"]:
-                    return {"cmd": "error", "val": "Access denied to this channel"}
+                user_id, error = _require_user_id(ws)
+                if error:
+                    return error
+                _, error = _require_text_channel_access(user_id, channel_name)
+                if error:
+                    return error
 
                 # Get the specific message
                 msg = channels.get_channel_message(channel_name, message_id)
@@ -461,19 +482,12 @@ def handle(ws, message, server_data=None):
                 if not channel_name or not message_id:
                     return {"cmd": "error", "val": "Channel name and message ID are required"}
 
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "User not authenticated"}
-
-                user_data = users.get_user(user_id)
-                if not user_data:
-                    return {"cmd": "error", "val": "User not found"}
-
-                # Check if user can see this channel
-                allowed_channels = channels.get_all_channels_for_roles(user_data.get("roles", []))
-
-                if channel_name not in [c.get("name") for c in allowed_channels if c.get("type") == "text"]:
-                    return {"cmd": "error", "val": "Access denied to this channel"}
+                user_id, error = _require_user_id(ws)
+                if error:
+                    return error
+                _, error = _require_text_channel_access(user_id, channel_name)
+                if error:
+                    return error
 
                 # Get replies to the message
                 replies = channels.get_message_replies(channel_name, message_id, limit)
@@ -482,24 +496,22 @@ def handle(ws, message, server_data=None):
                 return {"cmd": "message_replies", "channel": channel_name, "message_id": message_id, "replies": replies}
             case "channels_get":
                 # Handle request for available channels
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "User not authenticated"}
-                    
-                user_data = users.get_user(user_id)  # Ensure user exists
+                user_id, error = _require_user_id(ws)
+                if error:
+                    return error
+                user_data = users.get_user(user_id)
                 if not user_data:
                     return {"cmd": "error", "val": "User not found"}
                 channels_list = channels.get_all_channels_for_roles(user_data.get("roles", []))
                 return {"cmd": "channels_get", "val": channels_list}
             case "user_timeout":
                 # Handle request to set timeout for a user
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "Authentication required"}
-
-                user_roles = users.get_user_roles(user_id)
-                if not user_roles or "owner" not in user_roles:
-                    return {"cmd": "error", "val": "Access denied: owner role required"}
+                user_id, error = _require_user_id(ws, "Authentication required")
+                if error:
+                    return error
+                _, error = _require_user_roles(user_id, requiredRoles=["owner"])
+                if error:
+                    return error
 
                 timeout = message.get("timeout")
                 if not timeout:
@@ -541,13 +553,12 @@ def handle(ws, message, server_data=None):
                 return {"cmd": "user_timeout", "user": target, "timeout": timeout}
             case "user_ban":
                 # Handle request to ban a user
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "Authentication required"}
-
-                user_roles = users.get_user_roles(user_id)
-                if not user_roles or "owner" not in user_roles:
-                    return {"cmd": "error", "val": "Access denied: owner role required"}
+                user_id, error = _require_user_id(ws, "Authentication required")
+                if error:
+                    return error
+                _, error = _require_user_roles(user_id, requiredRoles=["owner"])
+                if error:
+                    return error
 
                 target = message.get("user")
                 if not target:
@@ -566,13 +577,12 @@ def handle(ws, message, server_data=None):
                 return {"cmd": "user_ban", "user": users.get_username_by_id(target_id), "banned": banned}
             case "user_unban":
                 # Handle request to unban a user
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "Authentication required"}
-
-                user_roles = users.get_user_roles(user_id)
-                if not user_roles or "owner" not in user_roles:
-                    return {"cmd": "error", "val": "Access denied: owner role required"}
+                user_id, error = _require_user_id(ws, "Authentication required")
+                if error:
+                    return error
+                _, error = _require_user_roles(user_id, requiredRoles=["owner"])
+                if error:
+                    return error
 
                 target = message.get("user")
                 if not target:
@@ -590,9 +600,9 @@ def handle(ws, message, server_data=None):
                 # Return username for display purposes
                 return {"cmd": "user_unban", "user": users.get_username_by_id(target_id), "unbanned": unbanned}
             case "user_leave":
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "Authentication required"}
+                user_id, error = _require_user_id(ws, "Authentication required")
+                if error:
+                    return error
                 
                 if not server_data or "connected_clients" not in server_data:
                     return {"cmd": "error", "val": "Server data not available"}
@@ -608,17 +618,17 @@ def handle(ws, message, server_data=None):
                 return {"cmd": "user_leave", "user": username, "val": "User left server", "global": True}
             case "users_list":
                 # Handle request for all users list
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "User not authenticated"}
+                _, error = _require_user_id(ws)
+                if error:
+                    return error
                 
                 users_list = users.get_users()
                 return {"cmd": "users_list", "users": users_list}
             case "users_online":
                 # Handle request for online users list  
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "User not authenticated"}
+                _, error = _require_user_id(ws)
+                if error:
+                    return error
                 
                 if not server_data or "connected_clients" not in server_data:
                     return {"cmd": "error", "val": "Server data not available"}
@@ -654,13 +664,12 @@ def handle(ws, message, server_data=None):
                 return {"cmd": "users_online", "users": online_users}
             case "plugins_list":
                 # Handle request for loaded plugins (admin only)
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "User not authenticated"}
-                
-                user_roles = users.get_user_roles(user_id)
-                if not user_roles or "owner" not in user_roles:
-                    return {"cmd": "error", "val": "Access denied: owner role required"}
+                user_id, error = _require_user_id(ws)
+                if error:
+                    return error
+                _, error = _require_user_roles(user_id, requiredRoles=["owner"])
+                if error:
+                    return error
                 
                 if not server_data or "plugin_manager" not in server_data:
                     return {"cmd": "error", "val": "Plugin manager not available"}
@@ -669,13 +678,12 @@ def handle(ws, message, server_data=None):
                 return {"cmd": "plugins_list", "plugins": plugins}
             case "plugins_reload":
                 # Handle request to reload plugins (admin only)
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "User not authenticated"}
-                
-                user_roles = users.get_user_roles(user_id)
-                if not user_roles or "owner" not in user_roles:
-                    return {"cmd": "error", "val": "Access denied: owner role required"}
+                user_id, error = _require_user_id(ws)
+                if error:
+                    return error
+                _, error = _require_user_roles(user_id, requiredRoles=["owner"])
+                if error:
+                    return error
                 
                 if not server_data or "plugin_manager" not in server_data:
                     return {"cmd": "error", "val": "Plugin manager not available"}
@@ -694,14 +702,14 @@ def handle(ws, message, server_data=None):
                     return {"cmd": "plugins_reload", "val": "All plugins reloaded successfully"}
             case "rate_limit_status":
                 # Handle request for rate limit status (admin or self)
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "User not authenticated"}
+                user_id, error = _require_user_id(ws)
+                if error:
+                    return error
                 
                 target_user = message.get("user", user_id)  # Default to self
                 # Resolve username to ID if needed
                 target_id = users.get_id_by_username(target_user) or target_user
-                user_roles = users.get_user_roles(user_id)
+                user_roles, _ = _require_user_roles(user_id)
                 
                 # Allow users to check their own status, or admins to check anyone's
                 if target_id != user_id and (not user_roles or "owner" not in user_roles):
@@ -716,13 +724,12 @@ def handle(ws, message, server_data=None):
                 return {"cmd": "rate_limit_status", "user": status_username, "status": status}
             case "rate_limit_reset":
                 # Handle request to reset rate limit for a user (admin only)
-                user_id = getattr(ws, 'user_id', None)
-                if not user_id:
-                    return {"cmd": "error", "val": "User not authenticated"}
-                
-                user_roles = users.get_user_roles(user_id)
-                if not user_roles or "owner" not in user_roles:
-                    return {"cmd": "error", "val": "Access denied: owner role required"}
+                user_id, error = _require_user_id(ws)
+                if error:
+                    return error
+                _, error = _require_user_roles(user_id, requiredRoles=["owner"])
+                if error:
+                    return error
                 
                 target_user = message.get("user")
                 if not target_user:
@@ -737,6 +744,156 @@ def handle(ws, message, server_data=None):
                 
                 server_data["rate_limiter"].reset_user(target_id)
                 return {"cmd": "rate_limit_reset", "user": target_display, "val": f"Rate limit reset for user {target_display}"}
+            case "slash_register":
+                # Handle slash command registration
+                user_id, error = _require_user_id(ws, "Authentication required")
+                if error:
+                    return error
+
+                user_roles, error = _require_user_roles(user_id)
+                if error:
+                    return error
+                
+                commands = message.get("commands")
+                if not commands or not isinstance(commands, list):
+                    return {"cmd": "error", "val": "Commands must be provided as a list"}
+                
+                if not server_data:
+                    return {"cmd": "error", "val": "No server data provided"}
+                
+                # Validate and register each command
+                for cmd in commands:
+                    try:
+                        validatedCommand = SlashCommand.model_validate(cmd)
+                    except ValidationError as e:
+                        return {"cmd": "error", "val": f"Invalid command schema: {str(e)}"}
+                    
+                    server_data["slash_commands"][validatedCommand.name] = validatedCommand
+                    Logger.info(f"Registered slash command: {validatedCommand.name}")
+                
+                return {"cmd": "slash_register", "val": f"{len(commands)} commands registered successfully"}
+            case "slash_list":
+                # Handle request for list of slash commands
+                user_id, error = _require_user_id(ws, "Authentication required")
+                if error:
+                    return error
+
+                user_roles, error = _require_user_roles(user_id)
+                if error:
+                    return error
+                
+                if not server_data:
+                    return {"cmd": "error", "val": "No server data provided"}
+                
+                command_lines = []
+                for cmd in server_data["slash_commands"].values():
+                    options_str = (
+                        "\n".join(
+                            f"    • {opt.name} ({opt.type})"
+                            f"{' [required]' if opt.required else ''}"
+                            f"{f' choices={opt.choices}' if opt.choices else ''}"
+                            f": {opt.description}"
+                            for opt in cmd.options
+                        )
+                        if cmd.options
+                        else "    • No options"
+                    )
+                    
+                    whitelist_str = (
+                        f"  Whitelist roles: {', '.join(cmd.whitelistRoles)}"
+                        if cmd.whitelistRoles
+                        else "  Whitelist roles: None"
+                    )
+
+                    blacklist_str = (
+                        f"  Blacklist roles: {', '.join(cmd.blacklistRoles)}"
+                        if cmd.blacklistRoles
+                        else "  Blacklist roles: None"
+                    )
+                    
+                    ephemeral_str = f"  Ephemeral: {'Yes' if cmd.ephemeral else 'No'}"
+
+                    command_lines.append(
+                        f"/{cmd.name}\n"
+                        f"  {cmd.description}\n"
+                        f"{whitelist_str}\n"
+                        f"{blacklist_str}\n"
+                        f"{options_str}"
+                        f"\n{ephemeral_str}"
+                    )
+
+                    command_lines.append(
+                        f"/{cmd.name}\n"
+                        f"  {cmd.description}\n"
+                        f"{options_str}"
+                    )
+
+                msg = f"Registered Slash Commands ({len(command_lines)}):\n\n" + "\n\n".join(command_lines)
+
+                return {"cmd": "slash_list", "val": msg}
+            case "slash_call":
+                # Handle request to call a slash command
+                user_id, error = _require_user_id(ws, "Authentication required")
+                if error:
+                    return error
+
+                user_roles, error = _require_user_roles(user_id)
+                if error:
+                    return error
+                
+                if not server_data:
+                    return {"cmd": "error", "val": "No server data provided"}
+                
+                channel = message.get("channel")
+                if not channel:
+                    return {"cmd": "error", "val": "Channel parameter is required for slash commands"}
+                
+                # Verify command existence
+                cmd_name = message.get("command")
+                args = message.get("args", {})
+
+                if not isinstance(cmd_name, str):
+                    return {"cmd": "error", "val": "Command name must be a string"}
+
+                command = server_data["slash_commands"].get(cmd_name)
+                if not command:
+                    return {"cmd": "error", "val": f"Unknown slash command: /{cmd_name}"}
+
+                # Verify perms
+                user_roles, error = _require_user_roles(user_id, requiredRoles=command.whitelistRoles or [], forbiddenRoles=command.blacklistRoles or [])
+                if error:
+                    return error
+                
+                # Verify command shape
+                options = {option.name: option for option in command.options}
+                
+                for argument_name in args:
+                    if argument_name not in options:
+                        return {"cmd": "error", "val": f"Unknown argument: {argument_name}"}
+                
+                for option in command.options:
+                    if option.required and option.name not in args:
+                        return {"cmd": "error", "val": f"Missing required argument: {option.name}"}
+                    
+                # Validate types
+                for optionName, value in args.items():
+                    option = options[optionName]
+                    
+                    if not _validate_type(value, option.type):
+                        return {"cmd": "error", "val": f"Invalid type for argument '{optionName}': expected {option.type}"}
+
+                return {"cmd": "slash_call", "val": {"command": cmd_name, "args": args}, "invoker": user_id, "channel": channel, "global": True}
+            case "slash_response":
+                # Handle response to a slash command
+                user_id, error = _require_user_id(ws, "Authentication required")
+                if error:
+                    return error
+
+                user_roles, error = _require_user_roles(user_id)
+                if error:
+                    return error
+                
+                return {"cmd": "slash_response", "val": message.get("response"), "invoker": message.get("invoker"), "global": message.get("ephemeral", True)}
             case _:
                 return {"cmd": "error", "val": f"Unknown command: {message.get('cmd')}"}
     # except Exception as e:
