@@ -19,31 +19,31 @@ Accessible here: https://runnova.github.io/orion/
 ## mistium html
 Accessible here: https://originchats.mistium.com/
 
-|                     | stormy | allucat electron | mistium origin | orion | mistium html |
-|---------------------|--------|------------------|----------------|-------|--------------|
-| message grouping    |        | yes              | yes            | yes   | yes          |
-| role colours        | yes    | yes              | yes            | yes   | yes          |
-| editing messages    | yes    | yes              | yes            |       | yes          |
-| deleting messages   |        | yes              | yes            | yes   | yes          |
-| links               | yes    | yes              |                | yes   | yes          |
-| infinite scrolling  |        | yes              |                | yes   | yes          |
-| emoji shortcodes    |        | yes              |                | yes   | yes          |
-| markdown            | yes    | yes              |                | yes   | yes          |
-| reactions           |        | yes              | yes            |       | yes          |
-| typing indicators   |        | yes              | yes            | yes   | yes          |
-| multiple servers    | yes    | yes              | yes            | yes   | yes          |
-| replies             | yes    | yes              | yes            | yes   | yes          |
-| image embeds        |        | yes              | yes            | yes   | yes          |
-| tenor and gifs      |        | yes              | yes            | yes   | yes          |
-| pings               |        | yes              | yes            | yes   | yes          |
-| rate limit handling |        | yes              | yes            |       |              |
-| profile view        |        | yes              | yes            | yes   |              |
-| pinned messages     |        |                  | yes            |       |              |
-| message searching   |        |                  |                |       |              |
-| user list           |        | yes              | yes            | yes   | yes          |
-| channel links (#)   |        | yes              |                |       |              |
-| message links (#$)  |        |                  |                |       |              |
-| timeouts            |        | yes              | yes            |       |              |
-| server leaving      |        | yes              | yes            |       |              |
+|                     | stormy | allucat electron | mistium origin | orion | mistium html | fries |
+|---------------------|--------|------------------|----------------|-------|--------------|-------|
+| message grouping    |        | yes              | yes            | yes   | yes          | no    |
+| role colours        | yes    | yes              | yes            | yes   | yes          | no    |
+| editing messages    | yes    | yes              | yes            |       | yes          | no    |
+| deleting messages   |        | yes              | yes            | yes   | yes          | no    |
+| links               | yes    | yes              |                | yes   | yes          | no    |
+| infinite scrolling  |        | yes              |                | yes   | yes          | no    |
+| emoji shortcodes    |        | yes              |                | yes   | yes          | no    |
+| markdown            | yes    | yes              |                | yes   | yes          | no    |
+| reactions           |        | yes              | yes            |       | yes          | no    |
+| typing indicators   |        | yes              | yes            | yes   | yes          | no    |
+| multiple servers    | yes    | yes              | yes            | yes   | yes          | no    |
+| replies             | yes    | yes              | yes            | yes   | yes          | no    |
+| image embeds        |        | yes              | yes            | yes   | yes          | no    |
+| tenor and gifs      |        | yes              | yes            | yes   | yes          | no    |
+| pings               |        | yes              | yes            | yes   | yes          | no    |
+| rate limit handling |        | yes              | yes            |       |              | no    |
+| profile view        |        | yes              | yes            | yes   |              | no    |
+| pinned messages     |        |                  | yes            |       |              | no    |
+| message searching   |        |                  |                |       |              | no    |
+| user list           |        | yes              | yes            | yes   | yes          | no    |
+| channel links (#)   |        | yes              |                |       |              | no    |
+| message links (#$)  |        |                  |                |       |              | no    |
+| timeouts            |        | yes              | yes            |       |              | no    |
+| server leaving      |        | yes              | yes            |       |              | no    |
 
 Table created with https://www.tablesgenerator.com/markdown_tables
