@@ -440,8 +440,8 @@ def on_new_message(ws, message_data, server_data=None):
         Logger.warning("Authentication check failed")
         return
     
-    username = getattr(ws, 'username', None)
-    user_roles = users.get_user_roles(username)
+    user_id = message_data.get('user_id', getattr(ws, 'user_id', None))
+    user_roles = users.get_user_roles(user_id)
     
     if not user_roles or not any(role in user_roles for role in REQUIRED_PERMISSIONS):
         return
