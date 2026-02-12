@@ -466,5 +466,3 @@ def on_new_message(ws, message_data, server_data=None):
         except Exception as e:
             Logger.error(f"Error executing command '{command}': {e}")
             handler.error(f"Command failed: {str(e)}")
-    else:
-        handler.reply(f"Unknown command: {command}\nUse !help for a list of commands")
