@@ -4,7 +4,7 @@ from pydantic import BaseModel
 class SlashCommandOption(BaseModel):
     name: str
     description: str
-    type: Literal["string", "integer", "boolean", "enum", "float"]
+    type: Literal["str", "int", "bool", "enum", "float"]
     choices: Optional[list] = None
     required: bool = True
 
