@@ -4,6 +4,9 @@
 ## mistium - origin
 Boot https://origin.mistium.com and open the app store, find originChats by mist and install it
 
+## fries' client is a WIP.
+MEMEMEME IM HERE TOO HI GUYS I'M GOING TO MAKE SOMETHING!!! MY OWN CLIENT!!! :D
+
 ## allucat electron
 Source accessible here: https://github.com/Allucat1000/OriginChats
 

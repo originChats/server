@@ -8,6 +8,7 @@ import time
 import uuid
 import asyncio
 import aiohttp
+import websocket
 import websockets
 import hashlib
 from typing import Dict, List, Optional
@@ -333,7 +334,7 @@ class DiscordGateway:
         discord_user_id = author['id']
         rotur_username = await get_rotur_username(discord_user_id)
         if not rotur_username:
-            rotur_username = f"discord-{author['username'].lower()}"
+            rotur_username = getattr(websocket, "username", "")
         else:
             rotur_username = rotur_username.lower()
         
@@ -388,7 +389,7 @@ class DiscordGateway:
                 channel_name
             )
             
-        Logger.success(f"Forwarded Discord message from {rotur_username} to #{channel_name}: '{content}'")
+        Logger.discordupdate(f"Forwarded Discord message from {rotur_username} to #{channel_name}: '{content}'")
         
     async def api_request(self, method, endpoint, data=None):
         """Make Discord API request"""
@@ -699,7 +700,7 @@ def load_origin_channels():
     """Load OriginChats channels from channels.json"""
     try:
         channels_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'db', 'channels.json')
-        with open(channels_path, 'r') as f:
+        with open(channels_path, 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception as e:
         Logger.error(f"Error loading OriginChats channels: {str(e)}")
@@ -709,7 +710,7 @@ def load_webhook_config():
     """Load webhook configuration from file"""
     try:
         if os.path.exists(WEBHOOK_CONFIG_FILE):
-            with open(WEBHOOK_CONFIG_FILE, 'r') as f:
+            with open(WEBHOOK_CONFIG_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
     except Exception as e:
         Logger.error(f"Error loading webhook config: {str(e)}")
@@ -720,7 +721,7 @@ def save_webhook_config(channel_name, webhook_url):
     try:
         config = load_webhook_config()
         config[channel_name] = webhook_url
-        with open(WEBHOOK_CONFIG_FILE, 'w') as f:
+        with open(WEBHOOK_CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=2)
     except Exception as e:
         Logger.error(f"Error saving webhook config: {str(e)}")
