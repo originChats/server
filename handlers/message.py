@@ -39,16 +39,32 @@ def _require_text_channel_access(user_id, channel_name):
 
 def _validate_type(value, expected_type):
     match expected_type:
-        case "string":
+        case "str":
             return isinstance(value, str)
         case "int":
-            return isinstance(value, int)
+            return isinstance(value, int) and not isinstance(value, bool)
         case "float":
-            return isinstance(value, (int, float))
+            return isinstance(value, (int, float)) and not isinstance(value, bool)
         case "bool":
             return isinstance(value, bool)
+        case "enum":
+            return isinstance(value, str)
         case _:
             return False
+
+
+def _validate_option_value(option_name, value, option):
+    if not _validate_type(value, option.type):
+        return False, f"Invalid type for argument '{option_name}': expected {option.type}, got {type(value).__name__}"
+
+    if option.type == "enum":
+        if not option.choices:
+            return False, f"Enum argument '{option_name}' has no choices configured"
+        if value not in option.choices:
+            allowed_values = ", ".join(option.choices)
+            return False, f"Invalid value for argument '{option_name}': expected one of [{allowed_values}], got '{value}'"
+
+    return True, None
 
 
 
@@ -851,6 +867,8 @@ def handle(ws, message, server_data=None):
                 # Verify command existence
                 cmd_name = message.get("command")
                 args = message.get("args", {})
+                if not isinstance(args, dict):
+                    return {"cmd": "error", "val": "Command args must be an object"}
 
                 if not isinstance(cmd_name, str):
                     return {"cmd": "error", "val": "Command name must be a string"}
@@ -878,9 +896,9 @@ def handle(ws, message, server_data=None):
                 # Validate types
                 for optionName, value in args.items():
                     option = options[optionName]
-                    
-                    if not _validate_type(value, option.type):
-                        return {"cmd": "error", "val": f"Invalid type for argument '{optionName}': expected {option.type}, got {type(value)}"}
+                    is_valid, error_message = _validate_option_value(optionName, value, option)
+                    if not is_valid:
+                        return {"cmd": "error", "val": error_message}
 
                 return {"cmd": "slash_call", "val": {"command": cmd_name, "args": args}, "invoker": user_id, "channel": channel, "global": True}
             case "slash_response":
@@ -896,8 +914,28 @@ def handle(ws, message, server_data=None):
                 channel = message.get("channel")
                 if not channel:
                     return {"cmd": "error", "val": "Channel parameter is required for slash commands"}
-                
-                return {"cmd": "slash_response", "val": message.get("response"), "invoker": message.get("invoker"), "channel": channel, "global": True}
+
+                response = message.get("response")
+                if not isinstance(response, str):
+                    return {"cmd": "error", "val": "Slash response must be a string"}
+
+                response = response.strip()
+                if not response:
+                    return {"cmd": "error", "val": "Slash response cannot be empty"}
+
+                out_msg = {
+                    "user": message.get("invoker") or user_id,
+                    "content": response,
+                    "timestamp": time.time(),
+                    "type": "message",
+                    "pinned": False,
+                    "id": str(uuid.uuid4())
+                }
+
+                channels.save_channel_message(channel, out_msg)
+                out_msg_for_client = channels.convert_messages_to_user_format([out_msg])[0]
+
+                return {"cmd": "slash_response", "val": response, "message": out_msg_for_client, "invoker": message.get("invoker"), "channel": channel, "global": True}
             case _:
                 return {"cmd": "error", "val": f"Unknown command: {message.get('cmd')}"}
     # except Exception as e:
