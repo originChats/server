@@ -935,7 +935,7 @@ def handle(ws, message, server_data=None):
                 channels.save_channel_message(channel, out_msg)
                 out_msg_for_client = channels.convert_messages_to_user_format([out_msg])[0]
 
-                return {"cmd": "slash_response", "val": response, "message": out_msg_for_client, "invoker": message.get("invoker"), "channel": channel, "global": True}
+                return {"cmd": "slash_response", "message": out_msg_for_client, "invoker": message.get("invoker"), "channel": channel, "global": True}
             case _:
                 return {"cmd": "error", "val": f"Unknown command: {message.get('cmd')}"}
     # except Exception as e:
