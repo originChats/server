@@ -23,7 +23,6 @@ class OriginChatsServer:
         self.file_observer = None
         self.slash_commands = {}
         
-        # Voice channel state: {channel_name: {user_id: {"peer_id": str, "username": str, "muted": bool}}}
         self.voice_channels = {}
         
         # Initialize rate limiter if enabled
