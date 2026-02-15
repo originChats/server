@@ -121,3 +121,42 @@ async def disconnect_user(connected_clients, identifier, reason="User disconnect
         connected_clients.discard(ws)
     
     return len(disconnected)
+
+async def broadcast_to_voice_channel(connected_clients, voice_channels, message, channel_name):
+    """Broadcast a message to all connected clients who are in a specific voice channel"""
+    disconnected = set()
+    sent_count = 0
+    
+    # Get participants in this voice channel
+    participants = voice_channels.get(channel_name, {})
+    if not participants:
+        return disconnected
+    
+    # Create a copy of the set to avoid "Set changed size during iteration" error
+    clients_copy = connected_clients.copy()
+    
+    for ws in clients_copy:
+        # Only send to authenticated users
+        if not getattr(ws, 'authenticated', False):
+            continue
+            
+        user_id = getattr(ws, 'user_id', None)
+        if not user_id:
+            continue
+        
+        # Check if user is in this voice channel
+        if user_id in participants:
+            success = await send_to_client(ws, message)
+            if not success:
+                disconnected.add(ws)
+            else:
+                sent_count += 1
+    
+    # Clean up disconnected clients
+    for ws in disconnected:
+        connected_clients.discard(ws)
+    
+    if disconnected:
+        Logger.delete(f"Removed {len(disconnected)} disconnected clients from voice channel broadcast")
+    
+    return disconnected
