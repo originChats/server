@@ -1,140 +1,221 @@
-# OriginChats Server Architecture
+# OriginChats Server
+
+A WebSocket-based real-time chat server with voice channels, slash commands, role-based permissions, and plugin support.
+
+## Features
+
+- **Text Messaging** - Real-time messaging with replies, reactions, and search
+- **Voice Channels** - WebRTC peer-to-peer audio
+- **User Management** - Roles, permissions, bans, timeouts
+- **Rate Limiting** - Built-in spam protection
+- **Plugins** - Extensible plugin system
+- **Slash Commands** - Custom command handlers
+
+## Quick Start
+
+1. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. **Configure:**
+   - Edit `config.json` for server settings
+   - Set up Rotur authentication service
+
+3. **Run:**
+   ```bash
+   python init.py
+   ```
 
 ## Project Structure
 
 ```
 originChats/
-├── init.py                 # Main entry point (simplified)
-├── server.py              # Server class with core logic
-├── setup.py               # Server setup script
-├── config.json           # Configuration file
-├── watchers.py           # File system watchers
-├── db/                   # Database modules
-│   ├── channels.py
-│   ├── users.py
-│   ├── roles.py
-│   └── *.json           # Data files
-└── handlers/             # Request handlers
-    ├── auth.py          # Authentication logic
-    ├── message.py       # Message handling
-    ├── websocket_utils.py # WebSocket utilities
-    └── rotur.py         # Rotur integration
+├── init.py                 # Entry point
+├── server.py              # WebSocket server
+├── config.json            # Server configuration
+├── watchers.py            # File system watchers
+├── db/                    # Database modules
+│   ├── channels.py        # Channel management
+│   ├── users.py           # User management
+│   ├── roles.py           # Role management
+│   └── *.json             # Data files
+├── handlers/              # Request handlers
+│   ├── auth.py            # Authentication
+│   ├── message.py         # Command router
+│   ├── websocket_utils.py # WebSocket utilities
+│   └── rate_limiter.py    # Rate limiting
+├── plugins/               # Plugin examples
+└── docs/                  # Documentation
+    ├── client-development/
+    ├── commands/
+    └── data/
 ```
 
-## Modules Overview
+## Documentation
 
-### `init.py`
-- **Purpose**: Entry point for the application
-- **Responsibilities**: 
-  - Initialize and start the server
-  - Handle graceful shutdown
-- **Dependencies**: `server.py`
+- **[API Documentation](docs/)** - Complete API reference for client developers
+  - [Getting Started](docs/README.md#getting-started)
+  - [All Commands](docs/README.md#commands)
+  - [Data Structures](docs/README.md#data-structures)
+  - [Client Development Guide](docs/client-development/getting-started.md)
+  - [Voice Channels Implementation](docs/client-development/voice.md)
 
-### `server.py` 
-- **Purpose**: Core server class
-- **Responsibilities**:
-  - WebSocket connection management
-  - Client lifecycle handling
-  - Configuration management
-  - File watcher coordination
-- **Dependencies**: `handlers/`, `watchers.py`
+## Configuration
 
-### `handlers/auth.py`
-- **Purpose**: Authentication handling
-- **Responsibilities**:
-  - Rotur validation
-  - User creation and login
-  - Authentication state management
-  - User connection broadcasts
-- **Dependencies**: `db/users.py`, `db/roles.py`, `websocket_utils.py`
+Key settings in `config.json`:
 
-### `handlers/websocket_utils.py`
-- **Purpose**: WebSocket utility functions
-- **Responsibilities**:
-  - Client communication (send/receive)
-  - Heartbeat management
-  - Broadcasting to multiple clients
-  - Connection cleanup
-- **Dependencies**: `asyncio`, `websockets`
-
-### `handlers/message.py`
-- **Purpose**: Message processing and routing
-- **Responsibilities**:
-  - Command parsing and validation
-  - Message handling (CRUD operations)
-  - User/channel management commands
-  - Response formatting
-- **Dependencies**: `db/`, `handlers/websocket_utils.py`
-
-## Usage
-
-### Starting the Server
-```bash
-python init.py
-```
-
-### Setting Up the Server
-```bash
-python setup.py
-```
-
-### Configuration
-The server uses `config.json` for all configuration. Key sections:
-- `websocket`: Host and port settings
-- `rotur`: Authentication service configuration
-- `server`: Server metadata
-- `DB`: Database file locations
-
-## Error Handling
-
-Each module implements appropriate error handling:
-- WebSocket connection errors are logged and handled gracefully
-- Authentication failures are communicated to clients
-- Database errors are caught and reported
-- Server startup errors are logged with context
-
-## Development Guidelines
-
-1. **Adding New Features**: Create new handlers in the `handlers/` directory
-2. **Database Changes**: Modify the appropriate module in `db/`
-3. **WebSocket Changes**: Update `websocket_utils.py` for utility functions
-4. **Authentication Changes**: Modify `auth.py`
-5. **Server Configuration**: Update the `OriginChatsServer` class in `server.py`
-
-## Rate Limiting
-
-OriginChats includes built-in rate limiting to prevent spam and abuse:
-
-### Configuration
-Rate limiting is configured in `config.json`:
 ```json
 {
+  "websocket": {
+    "host": "127.0.0.1",
+    "port": 5613
+  },
+  "rotur": {
+    "validate_url": "...",
+    "validate_key": "..."
+  },
   "rate_limiting": {
     "enabled": true,
-    "messages_per_minute": 60,
-    "burst_limit": 10,
-    "cooldown_seconds": 30
+    "messages_per_minute": 30,
+    "burst_limit": 5,
+    "cooldown_seconds": 60
+  },
+  "limits": {
+    "post_content": 2000
   }
 }
 ```
 
-### Rate Limited Actions
-The following actions are subject to rate limiting:
-- **Message sending** (`message_new`)
-- **Message editing** (`message_edit`)
-- **Message deletion** (`message_delete`)
+See [Config Schema](docs/data/config.md) for full configuration options.
 
-### Rate Limit Response
-When a user is rate limited, they receive:
+## Rate Limiting
+
+OriginChats includes built-in rate limiting to prevent spam:
+
+- **Per-minute limit:** Maximum messages per user per minute (configurable)
+- **Burst protection:** Prevents spam in short time windows
+- **Cooldown:** Temporary restriction after burst limit exceeded
+
+Rate limited users receive:
 ```json
 {
   "cmd": "rate_limit",
-  "length": 30000
+  "length": <milliseconds>
 }
 ```
-Where `length` is the wait time in milliseconds before they can try again.
 
-### Rate Limiting Logic
-- **Per-minute limit**: Users can perform up to `messages_per_minute` actions per minute
-- **Burst protection**: Users can't perform more than `burst_limit` actions in 10 seconds
-- **Cooldown**: If burst limit is exceeded, user enters cooldown for `cooldown_seconds`
+## Channel Types
+
+### Text Channels
+- Send/receive messages
+- Edit/delete own messages
+- Add reactions
+- Reply to messages
+- Pin/unpin messages
+- Search messages
+
+### Voice Channels
+- WebRTC peer-to-peer audio
+- Join/leave freely
+- Mute/unmute
+- View participants without joining
+
+## Permissions
+
+Role-based permission system for:
+
+- View channels
+- Send messages
+- Edit own messages
+- Delete messages (own and others)
+- Pin messages
+- Add reactions
+- Administrative actions (ban, timeout, etc.)
+
+See [Permissions System](docs/data/permissions.md) for details.
+
+## Authentication
+
+OriginChats integrates with the Rotur authentication service:
+
+1. Server sends handshake with `validator_key`
+2. Client obtains validator from Rotur
+3. Client sends validator to server
+4. Server validates via Rotur API
+5. User is authenticated
+
+See [Authentication Guide](docs/auth.md) for full flow.
+
+## Clients
+
+Check out the [client list](clients.md) for official and community clients:
+
+## Development
+
+### Adding New Commands
+
+1. Add a new case in [`handlers/message.py`](handlers/message.py):
+   ```python
+   case "my_command":
+       # Handle command
+       return {"cmd": "my_response"}
+   ```
+
+2. Update documentation in `docs/commands/my_command.md`
+
+### Creating Plugins
+
+See `plugins/` directory for examples. Plugins can:
+- Respond to new messages
+- Handle slash commands
+- Modify message data
+- Trigger events
+
+## API Protocol
+
+All WebSocket messages follow this format:
+
+```json
+{
+  "cmd": "command_name",
+  "key": "value",
+  "global": true  // Optional: broadcast to all
+}
+```
+
+See [Protocol Documentation](docs/protocol.md) for details.
+
+## Error Handling
+
+All errors return:
+
+```json
+{
+  "cmd": "error",
+  "val": "Error message"
+}
+```
+
+See [Error Handling](docs/errors.md) for all possible errors.
+
+## Contributing
+
+Contributions are welcome! Areas of contribution:
+
+- Bug fixes
+- New commands
+- Plugin examples
+- Documentation improvements
+- Client implementations
+
+## License
+
+See LICENSE file for details.
+
+## Support
+
+- 📖 [Documentation](docs/)
+- 🐛 [Issue Tracker](https://github.com/...)
+- 💬 [Discord](https://discord.gg/...)
+

@@ -33,14 +33,15 @@ Accessible here: https://originchats.mistium.com/
 | image embeds        |        | yes              | yes            | yes   | yes          |
 | tenor and gifs      |        | yes              | yes            | yes   | yes          |
 | pings               |        | yes              | yes            | yes   | yes          |
-| rate limit handling |        | yes              | yes            |       |              |
-| profile view        |        | yes              | yes            | yes   |              |
+| rate limit handling |        | yes              | yes            |       | yes          |
+| profile view        |        | yes              | yes            | yes   | yes          |
 | pinned messages     |        |                  | yes            |       |              |
 | message searching   |        |                  |                |       |              |
 | user list           |        | yes              | yes            | yes   | yes          |
-| channel links (#)   |        | yes              |                |       |              |
+| channel links (#)   |        | yes              |                |       | yes          |
 | message links (#$)  |        |                  |                |       |              |
 | timeouts            |        | yes              | yes            |       |              |
-| server leaving      |        | yes              | yes            |       |              |
+| server leaving      |        | yes              | yes            |       | yes          |
+| voice calling       |        |                  |                |       | yes          |
 
 Table created with https://www.tablesgenerator.com/markdown_tables

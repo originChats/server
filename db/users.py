@@ -185,9 +185,40 @@ def remove_role(user_id, role):
     """
     user = get_user(user_id)
     if user:
-        user["roles"].remove(role)
+        if role in user["roles"]:
+            user["roles"].remove(role)
+            save_user(user_id, user)
+            return True
+    return False
+
+def remove_user_roles(user_id, roles_to_remove):
+    """
+    Remove multiple roles from a user.
+
+    Args:
+        user_id (str): The ID of the user.
+        roles_to_remove (list): A list of roles to remove.
+
+    Returns:
+        bool: True if at least one role was removed, False otherwise.
+    """
+    user = get_user(user_id)
+    if not user:
+        return False
+    
+    current_roles = user.get("roles", [])
+    removed_any = False
+    
+    for role in roles_to_remove:
+        if role in current_roles:
+            current_roles.remove(role)
+            removed_any = True
+    
+    if removed_any:
+        user["roles"] = current_roles
         save_user(user_id, user)
         return True
+    
     return False
 
 def remove_user(user_id):

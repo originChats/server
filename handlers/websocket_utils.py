@@ -49,31 +49,31 @@ async def broadcast_to_all(connected_clients, message):
 
 async def broadcast_to_channel(connected_clients, message, channel_name):
     """Broadcast a message to all connected clients who have access to the specified channel"""
-    from db import users, channels
+    from db import channels
     
     disconnected = set()
     sent_count = 0
     
-    # Create a copy of the set to avoid "Set changed size during iteration" error
     clients_copy = connected_clients.copy()
     
     for ws in clients_copy:
-        # Only send to authenticated users
         if not getattr(ws, 'authenticated', False):
             continue
             
         user_id = getattr(ws, 'user_id', None)
         if not user_id:
             continue
-            
-        # Get user roles
-        user_data = users.get_user(user_id)
-        if not user_data:
-            continue
-            
-        user_roles = user_data.get("roles", [])
         
-        # Check if user has view permission for this channel
+        user_roles = getattr(ws, 'user_roles', None)
+        if user_roles is None:
+            from db import users
+            user_data = users.get_user(user_id)
+            if user_data:
+                user_roles = user_data.get("roles", [])
+                ws.user_roles = user_roles
+            else:
+                continue
+        
         if channels.does_user_have_permission(channel_name, user_roles, "view"):
             success = await send_to_client(ws, message)
             if not success:
@@ -81,7 +81,6 @@ async def broadcast_to_channel(connected_clients, message, channel_name):
             else:
                 sent_count += 1
     
-    # Clean up disconnected clients
     for ws in disconnected:
         connected_clients.discard(ws)
     
@@ -153,6 +152,58 @@ async def broadcast_to_voice_channel(connected_clients, voice_channels, message,
                 sent_count += 1
     
     # Clean up disconnected clients
+    for ws in disconnected:
+        connected_clients.discard(ws)
+    
+    if disconnected:
+        Logger.delete(f"Removed {len(disconnected)} disconnected clients from voice channel broadcast")
+    
+    return disconnected
+
+async def broadcast_to_voice_channel_with_viewers(connected_clients, voice_channels, participant_message, viewer_message, channel_name):
+    """Broadcast to voice channel participants (with peer_id) AND to channel viewers (without peer_id)"""
+    from db import channels
+    
+    disconnected = set()
+    sent_count = 0
+    
+    participants = voice_channels.get(channel_name, {})
+    if not participants:
+        return disconnected
+    
+    clients_copy = connected_clients.copy()
+    
+    for ws in clients_copy:
+        if not getattr(ws, 'authenticated', False):
+            continue
+            
+        user_id = getattr(ws, 'user_id', None)
+        if not user_id:
+            continue
+        
+        user_roles = getattr(ws, 'user_roles', None)
+        if user_roles is None:
+            from db import users
+            user_data = users.get_user(user_id)
+            if user_data:
+                user_roles = user_data.get("roles", [])
+                ws.user_roles = user_roles
+            else:
+                continue
+        
+        if not channels.does_user_have_permission(channel_name, user_roles, "view"):
+            continue
+        
+        if user_id in participants:
+            success = await send_to_client(ws, participant_message)
+        else:
+            success = await send_to_client(ws, viewer_message)
+        
+        if not success:
+            disconnected.add(ws)
+        else:
+            sent_count += 1
+    
     for ws in disconnected:
         connected_clients.discard(ws)
     

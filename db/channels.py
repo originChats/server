@@ -291,13 +291,17 @@ def get_channels():
     except FileNotFoundError:
         return []  # No channels found
     
-def create_channel(channel_name, channel_type):
+def create_channel(channel_name, channel_type, description=None, wallpaper=None, permissions=None, size=None):
     """
     Create a new channel.
 
     Args:
         channel_name (str): The name of the channel to create.
-        channel_type (str): The type of the channel (e.g., "text", "voice").
+        channel_type (str): The type of the channel (e.g., "text", "voice", "separator").
+        description (str, optional): Channel description.
+        wallpaper (str, optional): Wallpaper URL.
+        permissions (dict, optional): Channel permissions.
+        size (int, optional): Size for separator channels.
 
     Returns:
         bool: True if the channel was created successfully, False if it already exists.
@@ -314,18 +318,35 @@ def create_channel(channel_name, channel_type):
 
     new_channel = {
         "name": channel_name,
-        "type": channel_type,
-        "permissions": {
+        "type": channel_type
+    }
+
+    if channel_type != "separator":
+        new_channel["permissions"] = permissions or {
             "view": ["owner"],
             "send": ["owner"]
         }
-    }
+    
+    if description:
+        new_channel["description"] = description
+    
+    if wallpaper:
+        new_channel["wallpaper"] = wallpaper
+    
+    if size and channel_type == "separator":
+        new_channel["size"] = size
 
     channels.append(new_channel)
 
     # Save the updated channels index
     with open(channels_index, 'w') as f:
         json.dump(channels, f, indent=4)
+
+    # For text and voice channels, create an empty messages file
+    if channel_type in ["text", "voice"]:
+        os.makedirs(channels_db_dir, exist_ok=True)
+        with open(f"{channels_db_dir}/{channel_name}.json", 'w') as f:
+            json.dump([], f, separators=(',', ':'), ensure_ascii=False)
 
     return True
 
@@ -793,3 +814,66 @@ def get_reaction_users(channel_name, message_id, emoji):
         return None
     except json.JSONDecodeError:
         return None
+
+def channel_exists(channel_name):
+    """
+    Check if a channel exists in the channels index.
+
+    Args:
+        channel_name (str): The name of the channel to check.
+
+    Returns:
+        bool: True if the channel exists, False otherwise.
+    """
+    try:
+        with open(channels_index, 'r') as f:
+            channels = json.load(f)
+        return any(channel.get('name') == channel_name for channel in channels)
+    except FileNotFoundError:
+        return False
+
+def update_channel(channel_name, updates):
+    """
+    Update a channel's properties. Can rename the channel if 'name' is in updates.
+
+    Args:
+        channel_name (str): The current name of the channel to update.
+        updates (dict): The updates to apply. Can include:
+            - name (str): New channel name (optional)
+            - type (str): Channel type (optional)
+            - description (str): Channel description (optional)
+            - permissions (dict): Channel permissions (optional)
+            - wallpaper (str): Wallpaper URL (optional)
+            - size (int): Separator size (optional, for separator type)
+
+    Returns:
+        bool: True if the channel was updated successfully, False if it does not exist.
+    """
+    try:
+        with open(channels_index, 'r') as f:
+            channels = json.load(f)
+    except FileNotFoundError:
+        return False
+
+    for channel in channels:
+        if channel.get('name') == channel_name:
+            old_name = channel_name
+            
+            for key, value in updates.items():
+                if key in ['name', 'type', 'description', 'permissions', 'wallpaper', 'size']:
+                    channel[key] = value
+            
+            new_name = channel.get('name', old_name)
+            
+            if new_name != old_name and channel.get('type') != 'separator':
+                old_file_path = f"{channels_db_dir}/{old_name}.json"
+                new_file_path = f"{channels_db_dir}/{new_name}.json"
+                if os.path.exists(old_file_path):
+                    os.rename(old_file_path, new_file_path)
+            
+            with open(channels_index, 'w') as f:
+                json.dump(channels, f, indent=4)
+            
+            return True
+    
+    return False

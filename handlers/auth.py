@@ -28,6 +28,10 @@ async def handle_authentication(websocket, data, config_data, connected_clients,
     websocket.authenticated = True
     websocket.user_id = user_id
     websocket.username = username
+    
+    user = users.get_user(user_id)
+    if user:
+        websocket.user_roles = user.get("roles", [])
 
     # Check if user is banned
     if users.is_user_banned(user_id):
