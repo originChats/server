@@ -548,7 +548,7 @@ async def handle(ws, message, server_data=None):
                 messages = channels.get_channel_messages(channel_name, start, limit)
                 # Convert user IDs to usernames before sending
                 messages = channels.convert_messages_to_user_format(messages)
-                return {"cmd": "messages_get", "channel": channel_name, "messages": messages}
+                return {"cmd": "messages_get", "channel": channel_name, "messages": messages, "start": start, "limit": limit}
             case "message_get":
                 # Handle request for a specific message by ID
                 channel_name = message.get("channel")
