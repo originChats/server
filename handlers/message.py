@@ -607,7 +607,13 @@ async def handle(ws, message, server_data=None):
                 if server_data:
                     voice_channels = server_data.get("voice_channels", {})
                     for channel in channels_list:
-                        if channel.get("type") == "voice":
+                        if channel.get("type") == "text":
+                            channel_name = channel.get("name")
+                            # add timestamp for most recent message
+                            msgs = channels.get_channel_messages(channel_name, 0, 1)
+                            msg = msgs[0] if msgs else {}
+                            channel["last_message"] = msg.get("timestamp")
+                        elif channel.get("type") == "voice":
                             channel_name = channel.get("name")
                             if channel_name in voice_channels and user_id in voice_channels[channel_name]:
                                 participants = []
