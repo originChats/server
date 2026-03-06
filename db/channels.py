@@ -710,7 +710,7 @@ def add_reaction(channel_name, message_id, emoji_str, user_id):
 
         for msg in channel_data:
             if msg.get("id") == message_id:
-                if emoji_str not in emoji.EMOJI_DATA:
+                if not emoji.is_emoji(emoji_str):
                     return False
 
                 msg.setdefault("reactions", {})
@@ -738,7 +738,7 @@ def remove_reaction(channel_name, message_id, emoji_str, user_id):
 
         for msg in channel_data:
             if msg.get("id") == message_id:
-                if emoji_str not in emoji.EMOJI_DATA:
+                if not emoji.is_emoji(emoji_str):
                     return False
 
                 reactions = msg.get("reactions", {})
