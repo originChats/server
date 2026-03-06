@@ -106,9 +106,16 @@ class OriginChatsServer:
                         "slash_commands": self.slash_commands,
                         "voice_channels": self.voice_channels
                     }
-                    
+
+                    listener = data.get("listener")
+                    if listener and not isinstance(listener, str):
+                        Logger.warning(f"Invalid listener type: {type(listener)}")
+                        listener = None
                     # Handle message
                     response = await message_handler.handle(websocket, data, server_data)
+                    if listener:
+                        response.listener = listener
+                    
                     if not response:
                         Logger.warning(f"No response for message: {data}")
                         continue

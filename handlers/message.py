@@ -183,7 +183,14 @@ async def handle(ws, message, server_data=None):
                 user_id = getattr(ws, 'user_id', None)
 
                 if not channel_name or not content or not user_id:
-                    return _error("Invalid chat message format", match_cmd)
+                    missing_fields = []
+                    if not channel_name:
+                        missing_fields.append("channel")
+                    if not content:
+                        missing_fields.append("content")
+                    if not user_id:
+                        missing_fields.append("user_id")
+                    return _error(f"Missing fields: {', '.join(missing_fields)}", match_cmd)
 
                 content = content.strip()
                 if not content:

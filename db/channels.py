@@ -707,7 +707,7 @@ def add_reaction(channel_name, message_id, emoji_str, user_id):
 
             return True
 
-        return False
+    return False
 
 def remove_reaction(channel_name, message_id, emoji_str, user_id):
     channel_data = _read_channel_file(channel_name)
@@ -735,7 +735,7 @@ def remove_reaction(channel_name, message_id, emoji_str, user_id):
 
             return True
 
-        return False
+    return False
 
 def get_reactions(channel_name, message_id):
     """
