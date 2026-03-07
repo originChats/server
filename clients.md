@@ -35,11 +35,11 @@ Accessible here: https://originchats.mistium.com/
 | pings               |        | yes              | yes            | yes   | yes          |
 | rate limit handling |        | yes              | yes            |       | yes          |
 | profile view        |        | yes              | yes            | yes   | yes          |
-| pinned messages     |        |                  | yes            |       |              |
-| message searching   |        |                  |                |       |              |
+| pinned messages     |        | yes              | yes            |       |              |
+| message searching   |        | yes              |                |       |              |
 | user list           |        | yes              | yes            | yes   | yes          |
 | channel links (#)   |        | yes              |                |       | yes          |
-| message links (#$)  |        |                  |                |       |              |
+| message links (#$)  |        | yes              |                |       |              |
 | timeouts            |        | yes              | yes            |       |              |
 | server leaving      |        | yes              | yes            |       | yes          |
 | voice calling       |        |                  |                |       | yes          |
