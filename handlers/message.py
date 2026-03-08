@@ -1643,7 +1643,7 @@ async def handle(ws, message, server_data=None):
                     if emoji_id is None:
                         return _error("Emoji not found", match_cmd)
 
-                    file_path = serverEmojis.get_emoji_file_path(emoji_id)
+                    file_path = serverEmojis.get_emoji_file_name(emoji_id)
                     if not file_path:
                         return _error("Emoji file not found", match_cmd)
 

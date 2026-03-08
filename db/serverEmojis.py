@@ -2,6 +2,7 @@ import json
 import os
 import re
 import base64
+import threading
 from PIL import Image
 from io import BytesIO
 
@@ -16,8 +17,9 @@ _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 server_emojis_db = os.path.join(_MODULE_DIR, "serverEmojis")
 server_emojis_index = os.path.join(_MODULE_DIR, "serverEmojis.json")
 
-allowed_file_types = ["gif", "jpg", "jpeg", "svg"]
+allowed_file_types = ["gif", "jpg", "jpeg"]
 name_to_id: Dict[str, str] = {}
+_emoji_lock = threading.RLock()
 
 def _ensure_storage() -> None:
     os.makedirs(server_emojis_db, exist_ok=True)
@@ -52,14 +54,15 @@ def _generate_name_to_id(emojis: Dict[str, Dict[str, str]]) -> Dict[str, str]:
         emojis: Unpacked emojis.
     """
     global name_to_id
-    name_to_id = {}
+    updated_name_to_id: Dict[str, str] = {}
     for emoji_id, data in emojis.items():
         if not isinstance(data, dict):
             continue
         emoji_name = data.get("name")
         if not emoji_name:
             continue
-        name_to_id[_name_key(emoji_name)] = str(emoji_id)
+        updated_name_to_id[_name_key(emoji_name)] = str(emoji_id)
+    name_to_id = updated_name_to_id
     return name_to_id
 
 def get_emojis() -> Dict[str, Dict[str, Any]]:
@@ -69,17 +72,18 @@ def get_emojis() -> Dict[str, Dict[str, Any]]:
     Returns:
         A dict of emoji info keyed by emoji ID.
     """
-    _ensure_storage()
-    try:
-        with open(server_emojis_index, "r") as f:
-            emojis = json.load(f)
-            if not isinstance(emojis, dict):
-                emojis = {}
-    except (FileNotFoundError, json.JSONDecodeError):
-        emojis = {}
+    with _emoji_lock:
+        _ensure_storage()
+        try:
+            with open(server_emojis_index, "r") as f:
+                emojis = json.load(f)
+                if not isinstance(emojis, dict):
+                    emojis = {}
+        except (FileNotFoundError, json.JSONDecodeError):
+            emojis = {}
 
-    _generate_name_to_id(emojis)
-    return emojis
+        _generate_name_to_id(emojis)
+        return emojis
 
 def get_emoji(emoji_id: str) -> Optional[Dict[str, Any]]:
     return get_emojis().get(str(emoji_id))
@@ -88,9 +92,10 @@ def emoji_exists(emoji_id: str) -> bool:
     return str(emoji_id) in get_emojis()
 
 def get_emoji_id_by_name(name: str) -> Optional[str]:
-    if not name_to_id:
-        _generate_name_to_id(get_emojis())
-    return name_to_id.get(_name_key(name))
+    with _emoji_lock:
+        if not name_to_id:
+            _generate_name_to_id(get_emojis())
+        return name_to_id.get(_name_key(name))
 
 def emoji_name_exists(name: str) -> bool:
     return get_emoji_id_by_name(name) is not None
@@ -99,14 +104,14 @@ def _next_emoji_id(emojis: Dict[str, Dict[str, Any]]) -> str:
     numeric_ids = [int(k) for k in emojis.keys() if str(k).isdigit()]
     return str((max(numeric_ids) + 1) if numeric_ids else 0)
 
-def get_emoji_file_path(emoji_id: str) -> Optional[str]:
+def get_emoji_file_name(emoji_id: str) -> Optional[str]:
     emoji_data = get_emoji(emoji_id)
     if not emoji_data:
         return None
     file_name = emoji_data.get("fileName")
     if not file_name:
         return None
-    return os.path.join(server_emojis_db, file_name)
+    return file_name
 
 def _download_emoji(b64_image: str) -> str | None:
     """
@@ -119,11 +124,11 @@ def _download_emoji(b64_image: str) -> str | None:
         Filepath on sucess, None on failure.
     """
     try:
-        img_data = base64.b64decode(b64_image)
+        img_data = base64.b64decode(b64_image.split(',', 1)[-1])
         image = Image.open(BytesIO(img_data))
         extension = image.format.lower() if image.format else 'jpg'
         
-        path = f"db\\serverEmojis\\{_next_emoji_id}.{extension}"
+        path = os.path.join("db", os.path.join("serverEmojis", f"{_next_emoji_id}.{extension}"))
         image.save(path)
         return path
     except Exception as e:
@@ -146,23 +151,24 @@ def _add_emoji_by_filepath(name: str, file_name: str) -> Optional[str]:
         return None
     if not re.fullmatch(r"[A-Za-z0-9_]{1,64}", cleaned_name):
         return None
-    if emoji_name_exists(cleaned_name):
-        return None
     if not file_name or not is_allowed_file_type(file_name):
         return None
 
-    emojis = get_emojis()
-    emoji_id = _next_emoji_id(emojis)
+    with _emoji_lock:
+        emojis = get_emojis()
+        if _name_key(cleaned_name) in name_to_id:
+            return None
+        emoji_id = _next_emoji_id(emojis)
 
-    entry: Dict[str, Any] = {
-        "name": cleaned_name,
-        "fileName": file_name
-    }
+        entry: Dict[str, Any] = {
+            "name": cleaned_name,
+            "fileName": file_name
+        }
 
-    emojis[emoji_id] = entry
-    _write_emojis(emojis)
-    _generate_name_to_id(emojis)
-    return emoji_id
+        emojis[emoji_id] = entry
+        _write_emojis(emojis)
+        _generate_name_to_id(emojis)
+        return emoji_id
 
 def add_emoji(name: str, b64_image: str) -> Optional[str]:
     """
@@ -188,44 +194,48 @@ def update_emoji(emoji_id: str | int, updates: Dict[str, Any]) -> bool:
     Supported keys: name, fileName
     """
     emoji_id = str(emoji_id)
-    emojis = get_emojis()
-    if emoji_id not in emojis:
-        return False
     if not isinstance(updates, dict):
         return False
 
-    current = emojis[emoji_id]
-
-    if "name" in updates:
-        new_name = _normalize_name(updates["name"])
-        if not re.fullmatch(r"[A-Za-z0-9_]{1,64}", new_name):
+    with _emoji_lock:
+        emojis = get_emojis()
+        if emoji_id not in emojis:
             return False
-        existing_id = get_emoji_id_by_name(new_name)
-        if existing_id is not None and existing_id != emoji_id:
-            return False
-        current["name"] = new_name
 
-    if "fileName" in updates:
-        new_file = str(updates["fileName"]).strip()
-        if not new_file or not is_allowed_file_type(new_file):
-            return False
-        current["fileName"] = new_file
+        current = emojis[emoji_id]
 
-    emojis[emoji_id] = current
-    _write_emojis(emojis)
-    _generate_name_to_id(emojis)
-    return True
+        if "name" in updates:
+            new_name = _normalize_name(updates["name"])
+            if not re.fullmatch(r"[A-Za-z0-9_]{1,64}", new_name):
+                return False
+            existing_id = name_to_id.get(_name_key(new_name))
+            if existing_id is not None and existing_id != emoji_id:
+                return False
+            current["name"] = new_name
+
+        if "fileName" in updates:
+            new_file = str(updates["fileName"]).strip()
+            if not new_file or not is_allowed_file_type(new_file):
+                return False
+            current["fileName"] = new_file
+
+        emojis[emoji_id] = current
+        _write_emojis(emojis)
+        _generate_name_to_id(emojis)
+        return True
 
 def remove_emoji(emoji_id: str | int, delete_file: bool = False) -> bool:
     emoji_id = str(emoji_id)
-    emojis = get_emojis()
-    if emoji_id not in emojis:
-        return False
+    with _emoji_lock:
+        emojis = get_emojis()
+        if emoji_id not in emojis:
+            return False
 
-    file_path = get_emoji_file_path(emoji_id)
-    del emojis[emoji_id]
-    _write_emojis(emojis)
-    _generate_name_to_id(emojis)
+        file_name = emojis[emoji_id].get("fileName")
+        file_path = os.path.join(server_emojis_db, file_name) if file_name else None
+        del emojis[emoji_id]
+        _write_emojis(emojis)
+        _generate_name_to_id(emojis)
 
     if delete_file and file_path and os.path.isfile(file_path):
         os.remove(file_path)
