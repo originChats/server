@@ -3,10 +3,10 @@ from . import roles
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logger import Logger
+from config_store import get_config_value
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 users_index = os.path.join(_MODULE_DIR, "users.json")
-config = json.load(open(os.path.join(_MODULE_DIR, "..", "config.json"), "r"))
 
 def user_exists(user_id):
     """
@@ -44,7 +44,7 @@ def add_user(user_id, username=None):
         return False  # User already exists
 
     # Create user data with username
-    user_data = config["DB"]["users"]["default"].copy()
+    user_data = get_config_value("DB", "users", "default", default={}).copy()
     
     # If username is provided but different from ID (for backward compatibility)
     # or if user_data already has a username field from legacy data

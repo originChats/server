@@ -2,10 +2,14 @@ from db import channels, users, roles, serverEmojis
 import time, uuid, sys, os, asyncio, json
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logger import Logger
+from config_store import get_config_value
 from pydantic import ValidationError
 from schemas.slash_command_schema import SlashCommand
 from schemas.server_emoji_schema import Emoji_add, Emoji_delete, Emoji_get_all, Emoji_update, Emoji_get_filename, Emoji_get_id
 from handlers.websocket_utils import broadcast_to_voice_channel_with_viewers
+from typing import TypeVar
+
+T = TypeVar("T")
 
 
 def _error(error_message, match_cmd):
@@ -14,6 +18,9 @@ def _error(error_message, match_cmd):
         return {"cmd": "error", "src": match_cmd, "val": error_message}
     return {"cmd": "error", "val": error_message}
 
+def _config_value(server_data, *path: str, default: T) -> T:
+    config = server_data.get("config") if isinstance(server_data, dict) else None
+    return get_config_value(*path, default=default, config=config)
 
 def _require_user_id(ws, error_message = "User not authenticated"):
     user_id = getattr(ws, "user_id", None)
@@ -198,7 +205,7 @@ async def handle(ws, message, server_data=None):
                     return _error("Message content cannot be empty", match_cmd)
 
                 # Check message length limit from config
-                max_length = server_data.get("config", {}).get("limits", {}).get("post_content", 2000)
+                max_length = _config_value(server_data, "limits", "post_content", default=2000)
                 if len(content) > max_length:
                     return _error(f"Message too long. Maximum length is {max_length} characters", match_cmd)
 
@@ -477,6 +484,14 @@ async def handle(ws, message, server_data=None):
                     return error
 
                 search_results = channels.search_channel_messages(channel_name, query)
+                search_limit = _config_value(server_data, "limits", "search_results", default=30)
+                try:
+                    search_limit = int(search_limit)
+                except (TypeError, ValueError):
+                    search_limit = 30
+                if search_limit < 1:
+                    search_limit = 1
+                search_results = search_results[:search_limit]
                 # Convert user IDs to usernames before sending
                 search_results = channels.convert_messages_to_user_format(search_results)
                 return {"cmd": "messages_search", "channel": channel_name, "query": query, "results": search_results}

@@ -26,5 +26,6 @@
 
 **Notes:**
 - User must be authenticated and have access to the channel.
+- Result count is capped by `config.json` at `limits.search_results`.
 
 See implementation: [`handlers/message.py`](../handlers/message.py) (search for `case "messages_search":`).

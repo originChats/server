@@ -10,16 +10,25 @@ from typing import Any, Dict, Optional
 
 import emoji
 from logger import Logger
-
-# TODO: move config setup into separate file and add part that allows/disallows file types
+from config_store import get_config_value
 
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 server_emojis_db = os.path.join(_MODULE_DIR, "serverEmojis")
 server_emojis_index = os.path.join(_MODULE_DIR, "serverEmojis.json")
 
-allowed_file_types = ["gif", "jpg", "jpeg"]
 name_to_id: Dict[str, str] = {}
 _emoji_lock = threading.RLock()
+
+
+def get_allowed_file_types() -> list[str]:
+    configured_types = get_config_value("uploads", "emoji_allowed_file_types", default=["gif", "jpg", "jpeg"])
+    normalized_types = []
+    for file_type in configured_types:
+        normalized = _normalize_extension(file_type)
+        if normalized and normalized not in normalized_types:
+            normalized_types.append(normalized)
+
+    return normalized_types or ["gif", "jpg", "jpeg"]
 
 def _ensure_storage() -> None:
     os.makedirs(server_emojis_db, exist_ok=True)
@@ -44,7 +53,7 @@ def _normalize_extension(file_or_ext: str) -> str:
     return file_or_ext
 
 def is_allowed_file_type(file_or_ext: str) -> bool:
-    return _normalize_extension(file_or_ext) in allowed_file_types
+    return _normalize_extension(file_or_ext) in get_allowed_file_types()
 
 def _generate_name_to_id(emojis: Dict[str, Dict[str, str]]) -> Dict[str, str]:
     """

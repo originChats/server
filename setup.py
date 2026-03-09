@@ -1,5 +1,6 @@
 import os, json, sys
 from logger import Logger
+from config_builder import DEFAULT_CONFIG, build_config
 
 # OriginChats Setup Script
 Logger.info("Starting OriginChats server configuration...")
@@ -7,7 +8,7 @@ Logger.info("Starting OriginChats server configuration...")
 def get_input(prompt, default=None):
     """Get user input with optional default value"""
     if default:
-        user_input = input(f"{prompt} [{default}]: ").strip()
+        user_input = input(f"{prompt} [Default: {default}]: ").strip()
         return user_input if user_input else default
     return input(f"{prompt}: ").strip()
 
@@ -105,83 +106,73 @@ def main():
     
     # Server configuration
     print("--- Server Configuration ---")
-    server_name = get_input("Server name", "My OriginChats Server")
+    server_name = get_input("Server name", DEFAULT_CONFIG["server"]["name"])
     server_icon = get_input("Server icon URL (optional)")
     server_url = get_input("Server URL (optional)")
-    owner_name = get_input("Server owner name", "Admin")
+    owner_name = get_input("Server owner name", DEFAULT_CONFIG["server"]["owner"]["name"])
     
     print()
     print("--- WebSocket Configuration ---")
-    ws_host = get_input("WebSocket host", "127.0.0.1")
-    ws_port = get_input("WebSocket port", "5613")
+    ws_host = get_input("WebSocket host", DEFAULT_CONFIG["websocket"]["host"])
+    ws_port = get_input("WebSocket port", str(DEFAULT_CONFIG["websocket"]["port"]))
     
     try:
         ws_port = int(ws_port)
     except ValueError:
-        Logger.warning("Invalid port number, using default 5613")
-        ws_port = 5613
+        Logger.warning(f"Invalid port number, using default {DEFAULT_CONFIG['websocket']['port']}")
+        ws_port = DEFAULT_CONFIG["websocket"]["port"]
     
     print()
     print("--- Rotur Integration ---")
     print("Rotur is used for user authentication")
-    rotur_url = get_input("Rotur validation URL", "https://social.rotur.dev/validate")
-    rotur_key = get_input("Rotur validation key", "your_key_here")
+    rotur_url = get_input("Rotur validation URL", DEFAULT_CONFIG["rotur"]["validate_url"])
+    rotur_key = get_input("Rotur validation key", DEFAULT_CONFIG["rotur"]["validate_key"])
     
     print()
     print("--- Content Limits ---")
-    max_message_length = get_input("Maximum message length", "2000")
+    max_message_length = get_input("Maximum message length", str(DEFAULT_CONFIG["limits"]["post_content"]))
+    search_results_limit = get_input("Search results limit", str(DEFAULT_CONFIG["limits"]["search_results"]))
     
     try:
         max_message_length = int(max_message_length)
     except ValueError:
-        print("[OriginChats Setup] Invalid length, using default 2000")
-        max_message_length = 2000
-    
-    # Create config structure
-    config = {
-        "limits": {
-            "post_content": max_message_length
-        },
-        "rate_limiting": {
-            "enabled": True,
-            "messages_per_minute": 60,
-            "burst_limit": 10,
-            "cooldown_seconds": 30
-        },
-        "DB": {
-            "channels": "db/channels.json",
-            "users": {
-                "file": "db/users.json", 
-                "default": {
-                    "roles": ["user"]
-                }
-            }
-        },
-        "websocket": {
-            "host": ws_host,
-            "port": ws_port
-        },
-        "rotur": {
-            "validate_url": rotur_url,
-            "validate_key": rotur_key
-        },
-        "service": {
-            "name": "OriginChats",
-            "version": "1.0.0"
-        },
-        "server": {
-            "name": server_name,
-            "owner": {
-                "name": owner_name
-            }
-        }
-    }
-    
-    # Add optional fields if provided
-    if server_icon:
-        config["server"]["icon"] = server_icon
-    if server_url:
-        config["server"]["url"] = server_url
+        print(f"[OriginChats Setup] Invalid length, using default {DEFAULT_CONFIG['limits']['post_content']}")
+        max_message_length = DEFAULT_CONFIG["limits"]["post_content"]
+
+    try:
+        search_results_limit = int(search_results_limit)
+    except ValueError:
+        print(f"[OriginChats Setup] Invalid search limit, using default {DEFAULT_CONFIG['limits']['search_results']}")
+        search_results_limit = DEFAULT_CONFIG["limits"]["search_results"]
+
+    print()
+    print("--- Upload Rules ---")
+    emoji_file_types_csv = get_input(
+        "Allowed emoji file extensions (CSV)",
+        ",".join(DEFAULT_CONFIG["uploads"]["emoji_allowed_file_types"]),
+    )
+    emoji_allowed_file_types = [
+        ext.strip().lower().lstrip(".")
+        for ext in emoji_file_types_csv.split(",")
+        if ext.strip()
+    ]
+    if not emoji_allowed_file_types:
+        print("[OriginChats Setup] No valid emoji file extensions provided, using defaults")
+        emoji_allowed_file_types = DEFAULT_CONFIG["uploads"]["emoji_allowed_file_types"]
+
+    config = build_config(
+        server_name=server_name,
+        owner_name=owner_name,
+        ws_host=ws_host,
+        ws_port=ws_port,
+        rotur_url=rotur_url,
+        rotur_key=rotur_key,
+        max_message_length=max_message_length,
+        search_results_limit=search_results_limit,
+        server_icon=server_icon,
+        server_url=server_url,
+        emoji_allowed_file_types=emoji_allowed_file_types,
+    )
     
     # Create directories and files
     print()
