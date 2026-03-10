@@ -1,7 +1,7 @@
 import asyncio, websockets, json, os, mimetypes
 from urllib.parse import urlsplit, unquote
 from websockets.datastructures import Headers
-from websockets.http11 import Response
+from websockets.http11 import Request, Response, d, parse_headers, parse_line
 from handlers.websocket_utils import send_to_client, heartbeat, broadcast_to_all, broadcast_to_all_except, broadcast_to_channel_except, broadcast_to_voice_channel_with_viewers
 from handlers.auth import handle_authentication
 from handlers import message as message_handler
@@ -10,6 +10,50 @@ from db import serverEmojis
 import watchers
 from plugin_manager import PluginManager
 from logger import Logger
+
+
+def _patch_websockets_request_parse():
+    if getattr(Request, "_originchats_http_methods_patched", False):
+        return
+
+    @classmethod
+    def _originchats_parse_request(cls, read_line):
+        try:
+            request_line = yield from parse_line(read_line)
+        except EOFError as exc:
+            raise EOFError("connection closed while reading HTTP request line") from exc
+
+        try:
+            method, raw_path, protocol = request_line.split(b" ", 2)
+        except ValueError:
+            raise ValueError(f"invalid HTTP request line: {d(request_line)}") from None
+
+        if protocol != b"HTTP/1.1":
+            raise ValueError(
+                f"unsupported protocol; expected HTTP/1.1: {d(request_line)}"
+            )
+        if method not in {b"GET", b"HEAD", b"OPTIONS"}:
+            raise ValueError(f"unsupported HTTP method; expected GET; got {d(method)}")
+
+        path = raw_path.decode("ascii", "surrogateescape")
+        headers = yield from parse_headers(read_line)
+
+        if "Transfer-Encoding" in headers:
+            raise NotImplementedError("transfer codings aren't supported")
+
+        content_length = headers.get("Content-Length")
+        if content_length not in (None, "0"):
+            raise ValueError("unsupported request body")
+
+        request = cls(path, headers)
+        setattr(request, "method", method.decode("ascii", "surrogateescape"))
+        return request
+
+    setattr(Request, "parse", _originchats_parse_request)
+    setattr(Request, "_originchats_http_methods_patched", True)
+
+
+_patch_websockets_request_parse()
 
 class OriginChatsServer:
     """OriginChats WebSocket server"""
@@ -135,9 +179,26 @@ class OriginChatsServer:
 
         return file_path
 
-    def _serve_file_response(self, file_path, cache_control="public, max-age=3600"):
-        with open(file_path, "rb") as f:
-            body = f.read()
+    def _response_headers(self, extra_headers=None):
+        headers = list(extra_headers or [])
+        headers.extend([
+            ("Access-Control-Allow-Origin", "*"),
+            ("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS"),
+            ("Access-Control-Allow-Headers", "Content-Type, Authorization, Range"),
+            ("Access-Control-Expose-Headers", "Content-Length, Content-Type, Cache-Control"),
+        ])
+        return Headers(headers)
+
+    def _empty_response(self, status, reason, extra_headers=None):
+        headers = list(extra_headers or [])
+        headers.append(("Content-Length", "0"))
+        return Response(status, reason, self._response_headers(headers), b"")
+
+    def _serve_file_response(self, file_path, request_method="GET", cache_control="public, max-age=3600"):
+        body = b""
+        if request_method != "HEAD":
+            with open(file_path, "rb") as f:
+                body = f.read()
 
         content_type, _ = mimetypes.guess_type(file_path)
         if not content_type:
@@ -146,10 +207,10 @@ class OriginChatsServer:
         return Response(
             200,
             "OK",
-            Headers(
+            self._response_headers(
                 [
                     ("Content-Type", content_type),
-                    ("Content-Length", str(len(body))),
+                    ("Content-Length", str(os.path.getsize(file_path))),
                     ("Cache-Control", cache_control),
                 ]
             ),
@@ -163,12 +224,21 @@ class OriginChatsServer:
         """
         Serve HTTP asset files on the same socket as WebSocket traffic.
         """
+        request_method = getattr(request, "method", "GET").upper()
+        if request_method == "OPTIONS":
+            return self._empty_response(204, "No Content")
+        if request_method not in {"GET", "HEAD"}:
+            return self._empty_response(
+                405,
+                "Method Not Allowed",
+                [("Allow", "GET, HEAD, OPTIONS")],
+            )
+
         upgrade = request.headers.get("Upgrade", "")
         connection_hdr = request.headers.get("Connection", "")
         connection_tokens = {token.strip().lower() for token in connection_hdr.split(",") if token.strip()}
         is_websocket_upgrade = upgrade.lower() == "websocket" and "upgrade" in connection_tokens
         if is_websocket_upgrade:
-            # Let websockets handle normal WS handshakes.
             return None
 
         path = urlsplit(request.path).path
@@ -178,10 +248,10 @@ class OriginChatsServer:
                 return Response(
                     404,
                     "Not Found",
-                    Headers([("Content-Type", "text/plain; charset=utf-8")]),
-                    b"index.html not found",
+                    self._response_headers([("Content-Type", "text/plain; charset=utf-8")]),
+                    b"" if request_method == "HEAD" else b"index.html not found",
                 )
-            return self._serve_file_response(index_path, cache_control="no-cache")
+            return self._serve_file_response(index_path, request_method=request_method, cache_control="no-cache")
 
         if path.startswith("/emojis/"):
             file_name = unquote(path[len("/emojis/"):]).strip()
@@ -190,10 +260,10 @@ class OriginChatsServer:
                 return Response(
                     404,
                     "Not Found",
-                    Headers([("Content-Type", "text/plain; charset=utf-8")]),
-                    b"Emoji not found",
+                    self._response_headers([("Content-Type", "text/plain; charset=utf-8")]),
+                    b"" if request_method == "HEAD" else b"Emoji not found",
                 )
-            return self._serve_file_response(file_path, cache_control="public, max-age=3600")
+            return self._serve_file_response(file_path, request_method=request_method, cache_control="public, max-age=3600")
 
         if path.startswith("/server-assets/"):
             asset_name = path[len("/server-assets/"):].strip("/")
@@ -202,16 +272,16 @@ class OriginChatsServer:
                 return Response(
                     404,
                     "Not Found",
-                    Headers([("Content-Type", "text/plain; charset=utf-8")]),
-                    b"Server asset not found",
+                    self._response_headers([("Content-Type", "text/plain; charset=utf-8")]),
+                    b"" if request_method == "HEAD" else b"Server asset not found",
                 )
-            return self._serve_file_response(file_path, cache_control="public, max-age=3600")
+            return self._serve_file_response(file_path, request_method=request_method, cache_control="public, max-age=3600")
 
         return Response(
             404,
             "Not Found",
-            Headers([("Content-Type", "text/plain; charset=utf-8")]),
-            b"Not found",
+            self._response_headers([("Content-Type", "text/plain; charset=utf-8")]),
+            b"" if request_method == "HEAD" else b"Not found",
         )
 
     async def handle_client(self, websocket):
@@ -368,7 +438,6 @@ class OriginChatsServer:
         # Setup file watchers for users.json and channels.json
         self.file_observer = watchers.setup_file_watchers(self.broadcast_wrapper, self.main_event_loop)
 
-        # Get port from config or use default
         port = self.config.get("websocket", {}).get("port", 5613)
         host = self.config.get("websocket", {}).get("host", "127.0.0.1")
         

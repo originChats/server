@@ -5,6 +5,47 @@ import emoji
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 channels_db_dir = os.path.join(_MODULE_DIR, "channels")
 channels_index = os.path.join(_MODULE_DIR, "channels.json")
+DEFAULT_CHANNELS = [
+    {
+        "type": "text",
+        "name": "general",
+        "description": "General chat channel for everyone",
+        "permissions": {
+            "view": ["user"],
+            "send": ["user"],
+            "delete": ["admin", "moderator"]
+        }
+    }
+]
+
+def _ensure_storage():
+    os.makedirs(_MODULE_DIR, exist_ok=True)
+    os.makedirs(channels_db_dir, exist_ok=True)
+
+    if not os.path.exists(channels_index):
+        with open(channels_index, 'w') as f:
+            json.dump(DEFAULT_CHANNELS, f, indent=4)
+
+    try:
+        with open(channels_index, 'r') as f:
+            channels = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        channels = DEFAULT_CHANNELS
+        with open(channels_index, 'w') as f:
+            json.dump(channels, f, indent=4)
+
+    for channel in channels:
+        if channel.get("type") not in ["text", "voice"]:
+            continue
+        channel_name = channel.get("name")
+        if not channel_name:
+            continue
+        channel_file = f"{channels_db_dir}/{channel_name}.json"
+        if not os.path.exists(channel_file):
+            with open(channel_file, 'w') as f:
+                f.write('')
+
+_ensure_storage()
 
 def get_channel(channel_name):
     """

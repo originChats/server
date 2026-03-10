@@ -26,65 +26,11 @@ def yes_no(prompt, default="y"):
 
 def setup_directories():
     """Create necessary directories if they don't exist"""
-    directories = ["db", "db/backup", "db/serverAssets"]
+    directories = ["db", "db/backup", "db/serverAssets", "db/serverEmojis"]
     for directory in directories:
         if not os.path.exists(directory):
             os.makedirs(directory)
             Logger.add(f"Created directory: {directory}")
-
-def create_default_files():
-    """Create default database files"""
-    # Default users.json
-    users_file = "db/users.json"
-    if not os.path.exists(users_file):
-        default_users = {}
-        with open(users_file, "w") as f:
-            json.dump(default_users, f, indent=4)
-        Logger.add(f"Created {users_file}")
-    
-    # Default channels.json
-    channels_file = "db/channels.json"
-    if not os.path.exists(channels_file):
-        default_channels = [
-            {
-                "type": "text",
-                "name": "general",
-                "description": "General chat channel for everyone",
-                "permissions": {
-                    "view": ["user"],
-                    "send": ["user"],
-                    "delete": ["admin", "moderator"]
-                }
-            }
-        ]
-        with open(channels_file, "w") as f:
-            json.dump(default_channels, f, indent=4)
-        Logger.add(f"Created {channels_file}")
-    
-    # Default roles.json
-    roles_file = "db/roles.json"
-    if not os.path.exists(roles_file):
-        default_roles = {
-            "owner": {
-                "description": "Server owner with ultimate permissions.",
-                "color": "#9400D3"
-            },
-            "admin": {
-                "description": "Administrator role with full permissions.",
-                "color": "#FF0000"
-            },
-            "moderator": {
-                "description": "Moderator role with elevated permissions.",
-                "color": "#FFFF00"
-            },
-            "user": {
-                "description": "Regular user role with standard permissions.",
-                "color": "#FFFFFF"
-            }
-        }
-        with open(roles_file, "w") as f:
-            json.dump(default_roles, f, indent=4)
-        Logger.add(f"Created {roles_file}")
 
 def _prepare_server_asset_input(prompt_text):
     candidate = get_input(prompt_text).strip()
@@ -133,6 +79,7 @@ def main():
     # Server configuration
     print("--- Server Configuration ---")
     server_name = get_input("Server name", DEFAULT_CONFIG["server"]["name"])
+    print("Server assets directory (/db/serverAssets/) ready. You can now enter either a source file path or an existing filename from the folder...")
     server_icon = _prepare_server_asset_input("Server icon filename or source path (optional)")
     server_banner = _prepare_server_asset_input("Server banner filename or source path (optional)")
     server_url = get_input("Server URL (optional, used for hosted icon/banner links)")
@@ -218,7 +165,6 @@ def main():
     print()
     print("--- Setting up directories and files ---")
     setup_directories()
-    create_default_files()
     
     # Write config file
     with open("config.json", "w") as f:

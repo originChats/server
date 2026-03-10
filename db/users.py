@@ -7,6 +7,15 @@ from config_store import get_config_value
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 users_index = os.path.join(_MODULE_DIR, "users.json")
+DEFAULT_USERS = {}
+
+def _ensure_storage():
+    os.makedirs(_MODULE_DIR, exist_ok=True)
+    if not os.path.exists(users_index):
+        with open(users_index, "w") as f:
+            json.dump(DEFAULT_USERS, f, indent=4)
+
+_ensure_storage()
 
 def user_exists(user_id):
     """

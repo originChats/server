@@ -4,3 +4,8 @@
 __pycache__/
 *.env
 .mypy_cache/
+
+db/serverAssets/*                                                                                                                                                                                                                                                                                                    
+!db/serverAssets/.gitkeep                                                                                                                                                                                                                                                                                            
+db/serverEmojis/*                                                                                                                                                                                                                                                                                                    
+!db/serverEmojis/.gitkeep 

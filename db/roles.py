@@ -3,6 +3,32 @@ import json, os
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 roles_index = os.path.join(_MODULE_DIR, "roles.json")
+DEFAULT_ROLES = {
+    "owner": {
+        "description": "Server owner with ultimate permissions.",
+        "color": "#9400D3"
+    },
+    "admin": {
+        "description": "Administrator role with full permissions.",
+        "color": "#FF0000"
+    },
+    "moderator": {
+        "description": "Moderator role with elevated permissions.",
+        "color": "#FFFF00"
+    },
+    "user": {
+        "description": "Regular user role with standard permissions.",
+        "color": "#FFFFFF"
+    }
+}
+
+def _ensure_storage():
+    os.makedirs(_MODULE_DIR, exist_ok=True)
+    if not os.path.exists(roles_index):
+        with open(roles_index, "w") as f:
+            json.dump(DEFAULT_ROLES, f, indent=4)
+
+_ensure_storage()
 
 def get_role(role_name):
     """
