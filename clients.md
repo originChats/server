@@ -38,15 +38,19 @@ Web version accessible here: https://originchats.milosantos.com
 | pings               |        | yes              | yes            | yes   | yes          | yes          |
 | rate limit handling |        | yes              | yes            |       | yes          | yes          |
 | profile view        |        | yes              | yes            | yes   | yes          | yes          |
-| pinned messages     |        | yes              | yes            |       |              | yes          |
-| message searching   |        | yes              |                |       |              | yes          |
+| pinned messages     |        | yes              | yes            |       | yes          | yes          |
+| message searching   |        | yes              |                |       | yes          | yes          |
 | user list           |        | yes              | yes            | yes   | yes          | yes          |
 | channel links (#)   |        | yes              |                |       | yes          | yes          |
 | message links (#$)  |        | yes              |                |       |              | yes          |
+| dms by default      |        |                  | yes            |       | yes          | yes          |
+| account settings    |        |                  | yes            |       | yes          |              |
+| server settings     |        |                  |                |       | yes          |              |
+| multiple servers    |        | yes              | yes            |       | yes          | yes          |
 | timeouts            |        | yes              | yes            |       |              | yes          |
 | server leaving      |        | yes              | yes            |       | yes          | yes          |
 | voice calling       |        | yes              |                |       | yes          | yes          |
-| video streaming     |        | yes              |                |       |              | yes          |
+| video streaming     |        | yes              |                |       | yes          | yes          |
 | platform            | web    | electron         | originOS       | web   | web          | web/electron |
 
 Table created with https://www.tablesgenerator.com/markdown_tables
