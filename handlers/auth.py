@@ -1,15 +1,16 @@
 import requests
 from db import users, roles
 from handlers.websocket_utils import send_to_client, broadcast_to_all
-import sys
+import sys, random, string
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logger import Logger
 
 async def handle_authentication(websocket, data, config_data, connected_clients, client_ip, server_data=None):
     """Handle user authentication"""
-    url = config_data["rotur"]["validate_url"]
-    key = "originChats-" + config_data["rotur"]["validate_key"]
+    url = "https://api.rotur.dev/validate"
+    # generate a random string
+    key = "originChats-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=10))
     validator = data.get("validator")
     
     # Validate with rotur service
