@@ -632,18 +632,14 @@ async def handle(ws, message, server_data=None):
                             msg = msgs[0] if msgs else {}
                             channel["last_message"] = msg.get("timestamp")
                         elif channel.get("type") == "voice":
-                            channel_name = channel.get("name")
-                            if channel_name in voice_channels and user_id in voice_channels[channel_name]:
+                                channel_name = channel.get("name")
                                 participants = []
-                                for uid, data in voice_channels[channel_name].items():
-                                    if uid != user_id:
-                                        participants.append({
-                                            "username": data.get("username", ""),
-                                            "muted": data.get("muted", False)
-                                        })
+                                for uid, data in voice_channels.get(channel_name, {}).items():
+                                    participants.append({
+                                        "username": data.get("username", ""),
+                                        "muted": data.get("muted", False)
+                                    })
                                 channel["voice_state"] = participants
-                            else:
-                                channel["voice_state"] = []
                 
                 return {"cmd": "channels_get", "val": channels_list}
             case "user_timeout":
