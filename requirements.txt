@@ -10,3 +10,4 @@ discord.py==2.4.0
 python-dotenv==1.0.0
 emoji==2.15.0
 pydantic==2.10.5
+pillow==12.1.1

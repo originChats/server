@@ -1,6 +1,6 @@
 # Command: roles_list
 
-List all roles on the server (owner only).
+List all roles on the server.
 
 ## Request
 

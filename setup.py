@@ -97,12 +97,6 @@ def main():
         ws_port = DEFAULT_CONFIG["websocket"]["port"]
     
     print()
-    print("--- Rotur Integration ---")
-    print("Rotur is used for user authentication")
-    rotur_url = get_input("Rotur validation URL", DEFAULT_CONFIG["rotur"]["validate_url"])
-    rotur_key = get_input("Rotur validation key", DEFAULT_CONFIG["rotur"]["validate_key"])
-    
-    print()
     print("--- Content Limits ---")
     max_message_length = get_input("Maximum message length", str(DEFAULT_CONFIG["limits"]["post_content"]))
     search_results_limit = get_input("Search results limit", str(DEFAULT_CONFIG["limits"]["search_results"]))
@@ -147,10 +141,6 @@ def main():
         "websocket": {
             "host": ws_host,
             "port": ws_port,
-        },
-        "rotur": {
-            "validate_url": rotur_url,
-            "validate_key": rotur_key,
         },
         "limits": {
             "post_content": max_message_length,

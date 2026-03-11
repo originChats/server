@@ -6,10 +6,10 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logger import Logger
 
-async def handle_authentication(websocket, data, config_data, connected_clients, client_ip, server_data=None):
+async def handle_authentication(websocket, data, config_data, connected_clients, client_ip, server_data=None, validator_key=None):
     """Handle user authentication"""
-    url = config_data["rotur"]["validate_url"]
-    key = "originChats-" + config_data["rotur"]["validate_key"]
+    url = "https://api.rotur.dev/validate"
+    key = validator_key or ("originChats-" + config_data.get("rotur", {}).get("validate_key", ""))
     validator = data.get("validator")
     
     # Validate with rotur service
@@ -41,10 +41,11 @@ async def handle_authentication(websocket, data, config_data, connected_clients,
         return False
 
     # Create user if doesn't exist
-    if not users.user_exists(user_id):
+    is_new_user = not users.user_exists(user_id)
+    if is_new_user:
         users.add_user(user_id, username)
         Logger.add(f"User {username} (ID: {user_id}) created")
-    
+
     # Update username if it has changed
     existing_user = users.get_user(user_id)
     if existing_user and existing_user.get("username") != username:
@@ -63,11 +64,22 @@ async def handle_authentication(websocket, data, config_data, connected_clients,
 
     # Ensure username is set in user data
     user["username"] = username
-    await send_to_client(websocket, {
+
+    # Generate a fresh validator token for this session and include it in the ready packet
+    validator_token = users.generate_validator(user_id)
+
+    # Strip internal fields from the user object before sending to client
+    user_for_client = {k: v for k, v in user.items() if k != "validator"}
+
+    ready_payload = {
         "cmd": "ready",
-        "user": user
-    })
-    
+        "user": user_for_client
+    }
+    if validator_token:
+        ready_payload["validator"] = validator_token
+
+    await send_to_client(websocket, ready_payload)
+
     # Get the color of the first role for user_connect broadcast
     user_roles = user.get("roles", [])
     color = None
@@ -76,8 +88,30 @@ async def handle_authentication(websocket, data, config_data, connected_clients,
         first_role_data = roles.get_role(first_role_name)
         if first_role_data:
             color = first_role_data.get("color")
-    
+
     # Broadcast user connection to all clients (send username, not ID)
+    if is_new_user:
+        await broadcast_to_all(connected_clients, {
+            "cmd": "user_join",
+            "user": {
+                "username": username,
+                "roles": user.get("roles"),
+                "color": color
+            }
+        })
+        Logger.success(f"Broadcast user_join: {username} joined the server")
+
+        # Plugin event
+        if server_data and "plugin_manager" in server_data:
+            server_data["plugin_manager"].trigger_event("user_join", websocket, {
+                "username": username,
+                "user_id": user_id,
+                "roles": user.get("roles"),
+                "color": color,
+                "user": user
+            }, server_data)
+
+    # Broadcast user_connect for every connection (client broadcast only)
     await broadcast_to_all(connected_clients, {
         "cmd": "user_connect",
         "user": {
@@ -86,8 +120,14 @@ async def handle_authentication(websocket, data, config_data, connected_clients,
             "color": color
         }
     })
-    
-    # Trigger user_connect event for plugins
+
+    # Track connection count in server data
+    if server_data and "connected_usernames" in server_data:
+        connected_usernames = server_data["connected_usernames"]
+        if username not in connected_usernames:
+            connected_usernames[username] = 0
+        connected_usernames[username] += 1
+
     if server_data and "plugin_manager" in server_data:
         server_data["plugin_manager"].trigger_event("user_connect", websocket, {
             "username": username,

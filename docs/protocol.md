@@ -110,7 +110,7 @@ When a user joins a voice channel:
 
 ```json
 {
-  "type": "voice_user_joined",
+  "cmd": "voice_user_joined",
   "channel": "<channel_name>",
   "user": {
     "id": "<user_id>",
@@ -128,7 +128,7 @@ When a user leaves a voice channel:
 
 ```json
 {
-  "type": "voice_user_left",
+  "cmd": "voice_user_left",
   "channel": "<channel_name>",
   "username": "<username>",
   "global": true
@@ -141,7 +141,7 @@ When a user mutes/unmutes:
 
 ```json
 {
-  "type": "voice_user_updated",
+  "cmd": "voice_user_updated",
   "channel": "<channel_name>",
   "user": {
     "id": "<user_id>",

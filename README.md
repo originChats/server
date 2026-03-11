@@ -71,10 +71,6 @@ Key settings in `config.json`:
     "host": "127.0.0.1",
     "port": 5613
   },
-  "rotur": {
-    "validate_url": "...",
-    "validate_key": "..."
-  },
   "rate_limiting": {
     "enabled": true,
     "messages_per_minute": 30,

@@ -1,4 +1,4 @@
-import json, os
+import json, os, secrets
 from . import roles
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -285,3 +285,38 @@ def update_user_username(user_id, new_username):
         save_user(user_id, user)
         return True
     return False
+
+def generate_validator(user_id):
+    """
+    Generate a new random validator token for a user and store it.
+    Called every time a user connects so they always receive a fresh token.
+
+    Args:
+        user_id (str): The ID of the user.
+
+    Returns:
+        str: The generated validator token, or None if the user does not exist.
+    """
+    user = get_user(user_id)
+    if not user:
+        return None
+
+    validator = secrets.token_urlsafe(32)
+    user["validator"] = validator
+    save_user(user_id, user)
+    return validator
+
+def get_validator(user_id):
+    """
+    Get the stored validator token for a user.
+
+    Args:
+        user_id (str): The ID of the user.
+
+    Returns:
+        str: The validator token, or None if the user or token does not exist.
+    """
+    user = get_user(user_id)
+    if not user:
+        return None
+    return user.get("validator")

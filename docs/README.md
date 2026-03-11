@@ -137,7 +137,7 @@ To add a new config value:
 | `role_create` | Create a new role (owner only) | [View](commands/role_create.md) |
 | `role_update` | Update a role (owner only) | [View](commands/role_update.md) |
 | `role_delete` | Delete a role (owner only) | [View](commands/role_delete.md) |
-| `roles_list` | List all roles (owner only) | [View](commands/roles_list.md) |
+| `roles_list` | List all roles | [View](commands/roles_list.md) |
 
 ### Channel Management
 

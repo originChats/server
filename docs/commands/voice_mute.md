@@ -52,7 +52,7 @@ When a user mutes/unmutes, all clients with view permission receive:
 
 ```json
 {
-  "type": "voice_user_updated",
+  "cmd": "voice_user_updated",
   "channel": "<channel_name>",
   "user": {
     "id": "USR:1234567890abcdef",

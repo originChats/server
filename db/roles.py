@@ -185,3 +185,149 @@ def role_exists(role_name):
         return role_name in roles
     except FileNotFoundError:
         return False  # Roles database does not exist
+
+def add_role_permission(role_name, permission, value=True):
+    """
+    Add or update a permission for a role.
+    
+    Args:
+        role_name (str): The name of the role.
+        permission (str): The permission name (e.g., "mention_roles").
+        value: The permission value.
+    
+    Returns:
+        bool: True if the permission was set successfully, False otherwise.
+    """
+    try:
+        with open(roles_index, "r") as f:
+            roles = json.load(f)
+    except FileNotFoundError:
+        return False
+    
+    if role_name not in roles:
+        return False
+    
+    if "permissions" not in roles[role_name]:
+        roles[role_name]["permissions"] = {}
+    
+    roles[role_name]["permissions"][permission] = value
+    
+    with open(roles_index, "w") as f:
+        json.dump(roles, f, indent=4)
+    
+    return True
+
+def get_role_permissions(role_name):
+    """
+    Get all permissions for a role.
+    
+    Args:
+        role_name (str): The name of the role.
+    
+    Returns:
+        dict: A dictionary of permissions for the role, or None if the role does not exist.
+    """
+    role_data = get_role(role_name)
+    if role_data is None:
+        return None
+    return role_data.get("permissions", {})
+
+def remove_role_permission(role_name, permission):
+    """
+    Remove a permission from a role.
+    
+    Args:
+        role_name (str): The name of the role.
+        permission (str): The permission name to remove.
+    
+    Returns:
+        bool: True if the permission was removed, False otherwise.
+    """
+    try:
+        with open(roles_index, "r") as f:
+            roles = json.load(f)
+    except FileNotFoundError:
+        return False
+    
+    if role_name not in roles:
+        return False
+    
+    if "permissions" in roles[role_name] and permission in roles[role_name]["permissions"]:
+        del roles[role_name]["permissions"][permission]
+        
+        with open(roles_index, "w") as f:
+            json.dump(roles, f, indent=4)
+        
+        return True
+    
+    return False
+
+def can_role_mention_role(user_roles, target_role):
+    """
+    Check if users with the given roles can mention the target role.
+    
+    Args:
+        user_roles (list): List of roles the user has.
+        target_role (str): The role being mentioned.
+    
+    Returns:
+        bool: True if the user can mention the target role, False otherwise.
+    """
+    if "owner" in user_roles:
+        return True
+    
+    target_role_data = get_role(target_role)
+    if target_role_data is None:
+        return True
+    
+    permissions = target_role_data.get("permissions", {})
+    
+    mention_permission = permissions.get("mention_roles")
+    
+    if mention_permission is None:
+        return True
+    
+    if isinstance(mention_permission, str):
+        return mention_permission in user_roles
+    
+    if isinstance(mention_permission, list):
+        return any(role in user_roles for role in mention_permission)
+    
+    if isinstance(mention_permission, bool):
+        return mention_permission
+    
+    return True
+
+def get_hoisted_roles():
+    """
+    Get all roles that are hoisted (displayed prominently).
+    
+    Returns:
+        list: A list of role data for hoisted roles.
+    """
+    roles_dict = get_all_roles()
+    hoisted_roles = []
+    
+    for role_name, role_data in roles_dict.items():
+        if role_data.get("hoisted", False):
+            hoisted_roles.append({
+                "name": role_name,
+                **role_data
+            })
+    
+    return hoisted_roles
+
+def is_role_hoisted(role_name):
+    """
+    Check if a role is hoisted.
+    
+    Args:
+        role_name (str): The name of the role.
+    
+    Returns:
+        bool: True if the role is hoisted, False otherwise.
+    """
+    role_data = get_role(role_name)
+    if role_data is None:
+        return False
+    return role_data.get("hoisted", False)

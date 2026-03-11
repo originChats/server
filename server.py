@@ -1,4 +1,4 @@
-import asyncio, websockets, json, os, mimetypes
+import asyncio, websockets, json, os, mimetypes, secrets
 from urllib.parse import urlsplit, unquote
 from websockets.datastructures import Headers
 from websockets.http11 import Request, Response, d, parse_headers, parse_line
@@ -68,6 +68,7 @@ class OriginChatsServer:
         
         # Server state
         self.connected_clients = set()
+        self.connected_usernames = {}
         self.version = self.config["service"]["version"]
         self.heartbeat_interval = 30
         self.main_event_loop = None
@@ -114,7 +115,7 @@ class OriginChatsServer:
         return f"http://{host}:{port}"
 
     def _join_public_url(self, path):
-        return f"https://{self._normalize_public_base_url().rstrip('/')}/{path.lstrip('/')}"
+        return f"{self._normalize_public_base_url().rstrip('/')}/{path.lstrip('/')}"
 
     def _resolve_server_asset_path(self, file_path):
         if not file_path or not isinstance(file_path, str):
@@ -303,6 +304,10 @@ class OriginChatsServer:
         heartbeat_task = asyncio.create_task(heartbeat(websocket, self.heartbeat_interval))
         
         try:
+            # Generate a unique validator key for this connection
+            connection_validator_key = "originChats-" + secrets.token_urlsafe(24)
+            websocket.validator_key = connection_validator_key
+
             # Send handshake message
             await send_to_client(websocket, {
                 "cmd": "handshake",
@@ -310,7 +315,7 @@ class OriginChatsServer:
                     "server": self.config["server"],
                     "limits": self.config["limits"],
                     "version": "1.1.0",
-                    "validator_key": "originChats-" + self.config["rotur"]["validate_key"]
+                    "validator_key": connection_validator_key
                 }
             })
                 
@@ -329,8 +334,9 @@ class OriginChatsServer:
                             "rate_limiter": self.rate_limiter
                         }
                         await handle_authentication(
-                            websocket, data, self.config, 
-                            self.connected_clients, client_ip, auth_server_data
+                            websocket, data, self.config,
+                            self.connected_clients, client_ip, auth_server_data,
+                            validator_key=getattr(websocket, "validator_key", None)
                         )
                         continue
 
@@ -390,45 +396,55 @@ class OriginChatsServer:
         except Exception as e:
             Logger.error(f"Error handling connection: {str(e)}")
         finally:
-            # Clean up
             heartbeat_task.cancel()
             if websocket in self.connected_clients:
                 self.connected_clients.remove(websocket)
                 Logger.delete(f"Client {client_ip} removed. {len(self.connected_clients)} clients remaining")
-                
+
                 username = getattr(websocket, "username", "")
-                
+
                 if getattr(websocket, "authenticated", False):
                     user_id = getattr(websocket, "user_id", None)
                     current_voice_channel = getattr(websocket, "voice_channel", None)
-                    
+
                     if user_id and current_voice_channel:
                         if current_voice_channel in self.voice_channels and user_id in self.voice_channels[current_voice_channel]:
+                            msg = {"cmd": "voice_user_left", "channel": current_voice_channel, "username": username}
                             await broadcast_to_voice_channel_with_viewers(
                                 self.connected_clients,
                                 self.voice_channels,
-                                {
-                                    "type": "voice_user_left",
-                                    "channel": current_voice_channel,
-                                    "username": username
-                                },
-                                {
-                                    "type": "voice_user_left",
-                                    "channel": current_voice_channel,
-                                    "username": username
-                                },
+                                msg,
+                                msg,
                                 current_voice_channel
                             )
-                            
+
                             del self.voice_channels[current_voice_channel][user_id]
-                            
+
                             if not self.voice_channels[current_voice_channel]:
                                 del self.voice_channels[current_voice_channel]
 
-                await broadcast_to_all(self.connected_clients, {
-                    "cmd": "user_disconnect",
-                    "username": username
-                })
+                    ws_id = id(websocket)
+                    if ws_id in self.slash_commands:
+                        command_names = list(self.slash_commands[ws_id].keys())
+                        if command_names:
+                            await broadcast_to_all(self.connected_clients, {
+                                "cmd": "slash_remove",
+                                "commands": command_names
+                            })
+                            Logger.info(f"Removed {len(command_names)} slash commands for connection {ws_id}")
+                        del self.slash_commands[ws_id]
+
+                    if username in self.connected_usernames:
+                        self.connected_usernames[username] -= 1
+                        if self.connected_usernames[username] <= 0:
+                            del self.connected_usernames[username]
+                            await broadcast_to_all(self.connected_clients, {
+                                "cmd": "user_disconnect",
+                                "username": username
+                            })
+                            Logger.success(f"Broadcast user_disconnect: {username}")
+                        else:
+                            Logger.info(f"User {username} still has {self.connected_usernames[username]} active connection(s)")
     
     async def broadcast_wrapper(self, message):
         """Wrapper for broadcast_to_all to maintain compatibility with watchers"""

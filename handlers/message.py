@@ -6,7 +6,7 @@ from config_store import get_config_value
 from pydantic import ValidationError
 from schemas.slash_command_schema import SlashCommand
 from schemas.server_emoji_schema import Emoji_add, Emoji_delete, Emoji_get_all, Emoji_update, Emoji_get_filename, Emoji_get_id
-from handlers.websocket_utils import broadcast_to_voice_channel_with_viewers
+from handlers.websocket_utils import broadcast_to_voice_channel_with_viewers, broadcast_to_all
 from typing import TypeVar
 
 T = TypeVar("T")
@@ -142,19 +142,11 @@ async def _broadcast_voice_event(connected_clients, voice_channels, channel_name
     if user_data_without_peer is None:
         user_data_without_peer = {k: v for k, v in user_data_with_peer.items() if k != "peer_id"}
     
+    msg = {"cmd": event_type, "channel": channel_name, "user": user_data_with_peer}
     await broadcast_to_voice_channel_with_viewers(
         connected_clients,
         voice_channels,
-        {
-            "type": event_type,
-            "channel": channel_name,
-            "user": user_data_with_peer
-        },
-        {
-            "type": event_type,
-            "channel": channel_name,
-            "user": user_data_without_peer
-        },
+        msg, msg,
         channel_name
     )
 
@@ -221,6 +213,20 @@ async def handle(ws, message, server_data=None):
                 if not user_roles:
                     return _error("User roles not found", match_cmd)
 
+                # Check message length limit from config
+                max_length = server_data.get("config", {}).get("limits", {}).get("post_content", 2000)
+                if len(content) > max_length:
+                    return _error(f"Message too long. Maximum length is {max_length} characters", match_cmd)
+
+                # Check role mention permissions
+                import re
+                role_mentions = re.findall(r'@&([a-zA-Z0-9_]+)', content)
+                for mentioned_role in role_mentions:
+                    if not roles.role_exists(mentioned_role):
+                        continue
+                    if not roles.can_role_mention_role(user_roles, mentioned_role):
+                        return _error(f"You do not have permission to mention the '@&{mentioned_role}' role", match_cmd)
+
                 # Check if the user has permission to send messages in this channel
                 if not channels.does_user_have_permission(channel_name, user_roles, "send"):
                     return _error("You do not have permission to send messages in this channel", match_cmd)
@@ -249,10 +255,19 @@ async def handle(ws, message, server_data=None):
                         "user": replied_message.get("user")
                     }
 
+                # Add ping field if provided (for replies)
+                ping_field = message.get("ping")
+                if ping_field is not None:
+                    out_msg["ping"] = bool(ping_field)
+
                 channels.save_channel_message(channel_name, out_msg)
 
                 # Convert message to user format before sending (user ID -> username)
                 out_msg_for_client = channels.convert_messages_to_user_format([out_msg])[0]
+
+                # Include ping field if present
+                if "ping" in out_msg:
+                    out_msg_for_client["ping"] = out_msg["ping"]
 
                 # Get username for plugin event
                 username = users.get_username_by_id(user_id)
@@ -637,18 +652,14 @@ async def handle(ws, message, server_data=None):
                             msg = msgs[0] if msgs else {}
                             channel["last_message"] = msg.get("timestamp")
                         elif channel.get("type") == "voice":
-                            channel_name = channel.get("name")
-                            if channel_name in voice_channels and user_id in voice_channels[channel_name]:
+                                channel_name = channel.get("name")
                                 participants = []
-                                for uid, data in voice_channels[channel_name].items():
-                                    if uid != user_id:
-                                        participants.append({
-                                            "username": data.get("username", ""),
-                                            "muted": data.get("muted", False)
-                                        })
+                                for uid, data in voice_channels.get(channel_name, {}).items():
+                                    participants.append({
+                                        "username": data.get("username", ""),
+                                        "muted": data.get("muted", False)
+                                    })
                                 channel["voice_state"] = participants
-                            else:
-                                channel["voice_state"] = []
                 
                 return {"cmd": "channels_get", "val": channels_list}
             case "user_timeout":
@@ -750,19 +761,33 @@ async def handle(ws, message, server_data=None):
                 user_id, error = _require_user_id(ws, "Authentication required")
                 if error:
                     return error
-                
+
                 if not server_data or "connected_clients" not in server_data:
                     return _error("Server data not available", match_cmd)
-                
+
                 username = users.get_username_by_id(user_id)
-                
-                server_data["connected_clients"].discard(ws)  # Use discard instead of remove to avoid KeyError
-                users.remove_user(user_id)
-                server_data["plugin_manager"].trigger_event("user_left", ws, {
-                    "user_id": user_id,
+
+                if not users.is_user_banned(user_id):
+                    users.remove_user(user_id)
+                    Logger.success(f"User {username} (ID: {user_id}) removed from database")
+                else:
+                    Logger.warning(f"User {username} (ID: {user_id}) is banned, keeping in database")
+
+                connected_clients = server_data["connected_clients"]
+                await broadcast_to_all(connected_clients, {
+                    "cmd": "user_leave",
                     "username": username
-                }, server_data)
-                return {"cmd": "user_leave", "user": username, "val": "User left server", "global": True}
+                })
+
+                if "plugin_manager" in server_data:
+                    server_data["plugin_manager"].trigger_event("user_leave", ws, {
+                        "username": username,
+                        "user_id": user_id
+                    }, server_data)
+
+                Logger.success(f"Broadcast user_leave: {username} left the server")
+
+                return {"cmd": "user_leave", "user": username, "val": "User left server"}
             case "users_list":
                 # Handle request for all users list
                 _, error = _require_user_id(ws)
@@ -892,7 +917,6 @@ async def handle(ws, message, server_data=None):
                 server_data["rate_limiter"].reset_user(target_id)
                 return {"cmd": "rate_limit_reset", "user": target_display, "val": f"Rate limit reset for user {target_display}"}
             case "slash_register":
-                # Handle slash command registration
                 user_id, error = _require_user_id(ws, "Authentication required")
                 if error:
                     return error
@@ -900,27 +924,57 @@ async def handle(ws, message, server_data=None):
                 user_roles, error = _require_user_roles(user_id)
                 if error:
                     return error
-                
+
                 commands = message.get("commands")
                 if not commands or not isinstance(commands, list):
                     return _error("Commands must be provided as a list", match_cmd)
-                
+
                 if not server_data:
                     return _error("No server data provided", match_cmd)
-                
-                # Validate and register each command
+
+                slash_commands = server_data["slash_commands"]
+                connected_clients = server_data.get("connected_clients")
+
+                username = users.get_username_by_id(user_id)
+
+                for client_ws in connected_clients:
+                    if client_ws != ws and getattr(client_ws, "user_id") == user_id:
+                        return _error("You already have slash commands registered from another session", match_cmd)
+
+                slash_commands[id(ws)] = {}
+
+                registered_commands = []
                 for cmd in commands:
                     try:
                         validatedCommand = SlashCommand.model_validate(cmd)
                     except ValidationError as e:
                         return _error(f"Invalid command schema: {str(e)}", match_cmd)
-                    
-                    server_data["slash_commands"][validatedCommand.name] = validatedCommand
-                    Logger.info(f"Registered slash command: {validatedCommand.name}")
-                
+
+                    command_data = {
+                        "command": validatedCommand,
+                        "user_id": user_id,
+                        "username": username
+                    }
+                    slash_commands[id(ws)][validatedCommand.name] = command_data
+                    Logger.info(f"Registered slash command for user {username} ({user_id}): {validatedCommand.name}")
+                    registered_commands.append({
+                        "name": validatedCommand.name,
+                        "description": validatedCommand.description,
+                        "options": [opt.model_dump() for opt in validatedCommand.options],
+                        "whitelistRoles": validatedCommand.whitelistRoles,
+                        "blacklistRoles": validatedCommand.blacklistRoles,
+                        "ephemeral": validatedCommand.ephemeral,
+                        "registeredBy": username
+                    })
+
+                if connected_clients and registered_commands:
+                    await broadcast_to_all(connected_clients, {
+                        "cmd": "slash_add",
+                        "commands": registered_commands
+                    })
+
                 return {"cmd": "slash_register", "val": f"{len(commands)} commands registered successfully"}
             case "slash_list":
-                # Handle request for list of slash commands
                 user_id, error = _require_user_id(ws, "Authentication required")
                 if error:
                     return error
@@ -928,58 +982,28 @@ async def handle(ws, message, server_data=None):
                 user_roles, error = _require_user_roles(user_id)
                 if error:
                     return error
-                
+
                 if not server_data:
                     return _error("No server data provided", match_cmd)
-                
-                command_lines = []
-                for cmd in server_data["slash_commands"].values():
-                    options_str = (
-                        "\n".join(
-                            f"    • {opt.name} ({opt.type})"
-                            f"{' [required]' if opt.required else ''}"
-                            f"{f' choices={opt.choices}' if opt.choices else ''}"
-                            f": {opt.description}"
-                            for opt in cmd.options
-                        )
-                        if cmd.options
-                        else "    • No options"
-                    )
-                    
-                    whitelist_str = (
-                        f"  Whitelist roles: {', '.join(cmd.whitelistRoles)}"
-                        if cmd.whitelistRoles
-                        else "  Whitelist roles: None"
-                    )
 
-                    blacklist_str = (
-                        f"  Blacklist roles: {', '.join(cmd.blacklistRoles)}"
-                        if cmd.blacklistRoles
-                        else "  Blacklist roles: None"
-                    )
-                    
-                    ephemeral_str = f"  Ephemeral: {'Yes' if cmd.ephemeral else 'No'}"
+                slash_commands = server_data["slash_commands"]
+                commands_list = []
 
-                    command_lines.append(
-                        f"/{cmd.name}\n"
-                        f"  {cmd.description}\n"
-                        f"{whitelist_str}\n"
-                        f"{blacklist_str}\n"
-                        f"{options_str}"
-                        f"\n{ephemeral_str}"
-                    )
+                for ws_id, commands in slash_commands.items():
+                    for cmd_name, cmd_data in commands.items():
+                        command_obj = cmd_data["command"]
+                        commands_list.append({
+                            "name": command_obj.name,
+                            "description": command_obj.description,
+                            "options": [opt.model_dump() for opt in command_obj.options],
+                            "whitelistRoles": command_obj.whitelistRoles,
+                            "blacklistRoles": command_obj.blacklistRoles,
+                            "ephemeral": command_obj.ephemeral,
+                            "registeredBy": cmd_data["username"]
+                        })
 
-                    command_lines.append(
-                        f"/{cmd.name}\n"
-                        f"  {cmd.description}\n"
-                        f"{options_str}"
-                    )
-
-                msg = f"Registered Slash Commands ({len(command_lines)}):\n\n" + "\n\n".join(command_lines)
-
-                return {"cmd": "slash_list", "val": msg}
+                return {"cmd": "slash_list", "commands": commands_list}
             case "slash_call":
-                # Handle request to call a slash command
                 user_id, error = _require_user_id(ws, "Authentication required")
                 if error:
                     return error
@@ -987,15 +1011,14 @@ async def handle(ws, message, server_data=None):
                 user_roles, error = _require_user_roles(user_id)
                 if error:
                     return error
-                
+
                 if not server_data:
                     return _error("No server data provided", match_cmd)
-                
+
                 channel = message.get("channel")
                 if not channel:
                     return _error("Channel parameter is required for slash commands", match_cmd)
-                
-                # Verify command existence
+
                 cmd_name = message.get("command")
                 args = message.get("args", {})
                 if not isinstance(args, dict):
@@ -1004,37 +1027,69 @@ async def handle(ws, message, server_data=None):
                 if not isinstance(cmd_name, str):
                     return _error("Command name must be a string", match_cmd)
 
-                command = server_data["slash_commands"].get(cmd_name)
-                if not command:
+                slash_commands = server_data["slash_commands"]
+                command_data = None
+                for user_commands in slash_commands.values():
+                    if cmd_name in user_commands:
+                        command_data = user_commands[cmd_name]
+                        break
+
+                if not command_data:
                     return _error(f"Unknown slash command: /{cmd_name}", match_cmd)
 
-                # Verify perms
+                command = command_data["command"]
                 user_roles, error = _require_user_roles(user_id, requiredRoles=command.whitelistRoles or [], forbiddenRoles=command.blacklistRoles or [])
                 if error:
                     return error
-                
-                # Verify command shape
+
                 options = {option.name: option for option in command.options}
-                
+
                 for argument_name in args:
                     if argument_name not in options:
                         return _error(f"Unknown argument: {argument_name}", match_cmd)
-                
+
                 for option in command.options:
                     if option.required and option.name not in args:
                         return _error(f"Missing required argument: {option.name}", match_cmd)
-                    
-                # Validate types
+
                 for optionName, value in args.items():
                     option = options[optionName]
-                    
+
                     is_valid, error_message = _validate_option_value(optionName, value, option)
                     if not is_valid:
                         return {"cmd": "error", "val": error_message}
 
-                return {"cmd": "slash_call", "val": {"command": cmd_name, "args": args}, "invoker": user_id, "channel": channel, "global": True}
+                commander_user_id = command_data["user_id"]
+                invoker_username = users.get_username_by_id(user_id)
+
+                connected_clients = server_data.get("connected_clients", [])
+                commander_ws = None
+
+                for client_ws in connected_clients:
+                    if getattr(client_ws, "user_id", None) == commander_user_id:
+                        commander_ws = client_ws
+                        break
+
+                if not commander_ws:
+                    return _error(f"Command handler for /{cmd_name} is not currently connected", match_cmd)
+
+                slash_call_message = {
+                    "cmd": "slash_call",
+                    "val": {"command": cmd_name, "args": args, "commander": command_data["username"]},
+                    "invoker": user_id,
+                    "invokerUsername": invoker_username,
+                    "channel": channel
+                }
+
+                Logger.info(f"Sending slash_call to commander {commander_user_id} (username: {command_data['username']}) for command /{cmd_name}")
+
+                loop = asyncio.get_event_loop()
+                send_to_client_func = server_data.get("send_to_client")
+                if send_to_client_func:
+                    loop.create_task(send_to_client_func(commander_ws, slash_call_message))
+
+                return {"cmd": "slash_call_sent", "val": f"Command /{cmd_name} invoked"}
             case "slash_response":
-                # Handle response to a slash command
                 user_id, error = _require_user_id(ws, "Authentication required")
                 if error:
                     return error
@@ -1042,7 +1097,7 @@ async def handle(ws, message, server_data=None):
                 user_roles, error = _require_user_roles(user_id)
                 if error:
                     return error
-                
+
                 channel = message.get("channel")
                 if not channel:
                     return {"cmd": "error", "val": "Channel parameter is required for slash commands"}
@@ -1055,19 +1110,31 @@ async def handle(ws, message, server_data=None):
                 if not response:
                     return {"cmd": "error", "val": "Slash response cannot be empty"}
 
+                command = message.get("command")
+                if not command or not isinstance(command, str):
+                    return {"cmd": "error", "val": "Command parameter is required for slash responses"}
+
+                invoker_id = message.get("invoker") or user_id
+                invoker_username = users.get_username_by_id(invoker_id)
+
                 out_msg = {
-                    "user": message.get("invoker") or user_id,
+                    "user": user_id,
                     "content": response,
                     "timestamp": time.time(),
                     "type": "message",
                     "pinned": False,
-                    "id": str(uuid.uuid4())
+                    "id": str(uuid.uuid4()),
+                    "interaction": {
+                        "command": command,
+                        "username": invoker_username
+                    }
                 }
 
                 channels.save_channel_message(channel, out_msg)
                 out_msg_for_client = channels.convert_messages_to_user_format([out_msg])[0]
+                out_msg_for_client["interaction"] = out_msg["interaction"]
 
-                return {"cmd": "slash_response", "message": out_msg_for_client, "invoker": message.get("invoker"), "channel": channel, "global": True}
+                return {"cmd": "message_new", "message": out_msg_for_client, "channel": channel, "global": True}
             case "voice_join":
                 user_id, error = _require_user_id(ws, "Authentication required")
                 if error:
@@ -1092,11 +1159,12 @@ async def handle(ws, message, server_data=None):
                 current_channel = getattr(ws, "voice_channel", None)
                 if current_channel:
                     if current_channel in voice_channels and user_id in voice_channels[current_channel]:
+                        msg = {"cmd": "voice_user_left", "channel": current_channel, "username": username}
                         await broadcast_to_voice_channel_with_viewers(
                             server_data["connected_clients"],
                             voice_channels,
-                            {"type": "voice_user_left", "channel": current_channel, "username": username},
-                            {"type": "voice_user_left", "channel": current_channel, "username": username},
+                            msg,
+                            msg,
                             current_channel
                         )
                         del voice_channels[current_channel][user_id]
@@ -1145,11 +1213,12 @@ async def handle(ws, message, server_data=None):
                 voice_channels = server_data.get("voice_channels", {})
                 username = getattr(ws, "username", users.get_username_by_id(user_id))
                 
+                msg = {"cmd": "voice_user_left", "channel": current_channel, "username": username}
                 await broadcast_to_voice_channel_with_viewers(
                     server_data["connected_clients"],
                     voice_channels,
-                    {"type": "voice_user_left", "channel": current_channel, "username": username},
-                    {"type": "voice_user_left", "channel": current_channel, "username": username},
+                    msg,
+                    msg,
                     current_channel
                 )
                 
@@ -1233,6 +1302,10 @@ async def handle(ws, message, server_data=None):
                     role_data["description"] = message["description"]
                 if message.get("color"):
                     role_data["color"] = message["color"]
+                if message.get("permissions"):
+                    role_data["permissions"] = message["permissions"]
+                if message.get("hoisted") is not None:
+                    role_data["hoisted"] = message["hoisted"]
 
                 if roles.role_exists(role_name):
                     return _error("Role already exists", match_cmd)
@@ -1271,6 +1344,8 @@ async def handle(ws, message, server_data=None):
                     role_data["description"] = message["description"]
                 if message.get("color") is not None:
                     role_data["color"] = message["color"]
+                if message.get("hoisted") is not None:
+                    role_data["hoisted"] = message["hoisted"]
 
                 updated = roles.update_role(role_name, role_data)
                 if server_data:
@@ -1322,12 +1397,49 @@ async def handle(ws, message, server_data=None):
                 user_id, error = _require_user_id(ws, "Authentication required")
                 if error:
                     return error
+
+                all_roles = roles.get_all_roles()
+                return {"cmd": "roles_list", "roles": all_roles}
+            case "role_permissions_set":
+                user_id, error = _require_user_id(ws, "Authentication required")
+                if error:
+                    return error
                 _, error = _require_user_roles(user_id, requiredRoles=["owner"])
                 if error:
                     return error
 
-                all_roles = roles.get_all_roles()
-                return {"cmd": "roles_list", "roles": all_roles}
+                role_name = message.get("name")
+                if not role_name:
+                    return _error("Role name is required", match_cmd)
+
+                if not roles.role_exists(role_name):
+                    return _error("Role not found", match_cmd)
+
+                permissions = message.get("permissions")
+                if not isinstance(permissions, dict):
+                    return _error("Permissions must be an object", match_cmd)
+
+                role_data = roles.get_role(role_name)
+                if not role_data:
+                    return _error("Role not found", match_cmd)
+                role_data["permissions"] = permissions
+                updated = roles.update_role(role_name, role_data)
+
+                return {"cmd": "role_permissions_set", "name": role_name, "permissions": permissions, "updated": updated}
+            case "role_permissions_get":
+                user_id, error = _require_user_id(ws, "Authentication required")
+                if error:
+                    return error
+
+                role_name = message.get("name")
+                if not role_name:
+                    return _error("Role name is required", match_cmd)
+
+                if not roles.role_exists(role_name):
+                    return _error("Role not found", match_cmd)
+
+                role_perms = roles.get_role_permissions(role_name)
+                return {"cmd": "role_permissions_get", "name": role_name, "permissions": role_perms}
             case "channel_create":
                 user_id, error = _require_user_id(ws, "Authentication required")
                 if error:
@@ -1576,6 +1688,90 @@ async def handle(ws, message, server_data=None):
 
                 banned_users = users.get_banned_users()
                 return {"cmd": "users_banned_list", "users": banned_users}
+            case "pings_get":
+                user_id, error = _require_user_id(ws, "Authentication required")
+                if error:
+                    return error
+
+                user_data = users.get_user(user_id)
+                if not user_data:
+                    return _error("User not found", match_cmd)
+
+                limit = message.get("limit", 50)
+                offset = message.get("offset", 0)
+
+                if not isinstance(limit, int) or limit < 1 or limit > 100:
+                    return _error("Limit must be a number between 1 and 100", match_cmd)
+                if not isinstance(offset, int) or offset < 0:
+                    return _error("Offset must be a non-negative number", match_cmd)
+
+                user_roles = user_data.get("roles", [])
+                username = user_data.get("username")
+
+                ping_patterns = [
+                    f"@{username}",
+                    f"@{username}@",
+                    f"@{username} "
+                ]
+
+                for role in user_roles:
+                    ping_patterns.append(f"@&{role}")
+                    ping_patterns.append(f"@&{role}@")
+                    ping_patterns.append(f"@&{role} ")
+
+                all_channels = channels.get_channels()
+                pinged_messages = []
+
+                for channel_data in all_channels:
+                    if channel_data.get("type") != "text":
+                        continue
+
+                    channel_name = channel_data.get("name")
+                    if not channels.does_user_have_permission(channel_name, user_roles, "view"):
+                        continue
+
+                    channel_messages = channels.get_channel_messages(channel_name, 0, 10000)
+                    if not channel_messages:
+                        continue
+
+                    for msg in channel_messages:
+
+                        is_mentioned_in_content = False
+                        content = msg.get("content", "")
+                        for pattern in ping_patterns:
+                            if pattern in content:
+                                is_mentioned_in_content = True
+                                break
+
+                        is_replied_to = False
+                        reply_to = msg.get("reply_to")
+                        if reply_to and reply_to.get("user") == user_id:
+                            is_replied_to = True
+
+                        ping_field = msg.get("ping", True)
+                        if is_replied_to and not ping_field:
+                            continue
+
+                        if is_mentioned_in_content or is_replied_to:
+                            pinged_messages.append((msg, channel_name))
+
+                pinged_messages.sort(key=lambda x: x[0].get("timestamp", 0), reverse=True)
+
+                paginated_messages = pinged_messages[offset:offset + limit]
+
+                result_messages = []
+                for msg, channel_name in paginated_messages:
+                    converted_msg = channels.convert_messages_to_user_format([msg])[0]
+                    converted_msg["channel"] = channel_name
+                    result_messages.append(converted_msg)
+
+                return {
+                    "cmd": "pings_get",
+                    "messages": result_messages,
+                    "offset": offset,
+                    "limit": limit,
+                    "total": len(pinged_messages)
+                }
             case "emoji_add":
                 user_id, error = _require_user_id(ws, "Authentication required")
                 if error:

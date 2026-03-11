@@ -31,7 +31,7 @@ When a user leaves a voice channel, all clients with view permission receive:
 
 ```json
 {
-  "type": "voice_user_left",
+  "cmd": "voice_user_left",
   "channel": "<channel_name>",
   "username": "<username>",
   "global": true
