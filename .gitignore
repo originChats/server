@@ -8,4 +8,8 @@ __pycache__/
 db/serverAssets/*                                                                                                                                                                                                                                                                                                    
 !db/serverAssets/.gitkeep                                                                                                                                                                                                                                                                                            
 db/serverEmojis/*                                                                                                                                                                                                                                                                                                    
-!db/serverEmojis/.gitkeep 
+!db/serverEmojis/.gitkeep
+
+# VAPID keys — never commit the private key
+vapid/private_key.pem
+vapid/vapid_config.json

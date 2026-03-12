@@ -94,12 +94,27 @@ class OriginChatsServer:
         # Initialize plugin manager
         self.plugin_manager = PluginManager()
         self._configure_server_assets()
+        self.capabilities = self._detect_capabilities()
         
         Logger.info(f"OriginChats WebSocket Server v{self.version} initialized")
         if self.rate_limiter:
             Logger.info(f"Rate limiting enabled: {rate_config.get('messages_per_minute', 30)} msg/min, burst: {rate_config.get('burst_limit', 5)}")
         else:
             Logger.warning("Rate limiting disabled")
+
+    def _detect_capabilities(self):
+        """Build the list of supported commands from the docs/commands directory."""
+        commands_dir = os.path.join(os.path.dirname(__file__), "docs", "commands")
+        if not os.path.isdir(commands_dir):
+            Logger.warning("docs/commands directory not found; capabilities list will be empty")
+            return []
+        capabilities = sorted(
+            os.path.splitext(f)[0]
+            for f in os.listdir(commands_dir)
+            if f.endswith(".md") and not f.startswith(".")
+        )
+        Logger.info(f"Detected {len(capabilities)} capabilities from docs/commands")
+        return capabilities
 
     def _normalize_public_base_url(self):
         base_url = self.config.get("server", {}).get("url")
@@ -318,7 +333,8 @@ class OriginChatsServer:
                     "server": self.config["server"],
                     "limits": self.config["limits"],
                     "version": "1.1.0",
-                    "validator_key": connection_validator_key
+                    "validator_key": connection_validator_key,
+                    "capabilities": self.capabilities
                 }
             })
                 
@@ -351,6 +367,7 @@ class OriginChatsServer:
                     # Create server data object for message handler
                     server_data = {
                         "connected_clients": self.connected_clients,
+                        "connected_usernames": self.connected_usernames,
                         "config": self.config,
                         "plugin_manager": self.plugin_manager,
                         "rate_limiter": self.rate_limiter,

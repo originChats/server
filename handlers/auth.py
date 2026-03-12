@@ -111,22 +111,23 @@ async def handle_authentication(websocket, data, config_data, connected_clients,
                 "user": user
             }, server_data)
 
-    # Broadcast user_connect for every connection (client broadcast only)
-    await broadcast_to_all(connected_clients, {
-        "cmd": "user_connect",
-        "user": {
-            "username": username,
-            "roles": user.get("roles"),
-            "color": color
-        }
-    })
-
-    # Track connection count in server data
+    was_online = False
     if server_data and "connected_usernames" in server_data:
         connected_usernames = server_data["connected_usernames"]
+        was_online = username in connected_usernames and connected_usernames[username] > 0
         if username not in connected_usernames:
             connected_usernames[username] = 0
         connected_usernames[username] += 1
+
+    if not was_online:
+        await broadcast_to_all(connected_clients, {
+            "cmd": "user_connect",
+            "user": {
+                "username": username,
+                "roles": user.get("roles"),
+                "color": color
+            }
+        })
 
     if server_data and "plugin_manager" in server_data:
         server_data["plugin_manager"].trigger_event("user_connect", websocket, {

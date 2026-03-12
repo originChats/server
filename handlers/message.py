@@ -1,5 +1,5 @@
 from db import channels, users, roles, serverEmojis
-import time, uuid, sys, os, asyncio, json
+import time, uuid, sys, os, asyncio, json, re
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logger import Logger
 from config_store import get_config_value
@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from schemas.slash_command_schema import SlashCommand
 from schemas.server_emoji_schema import Emoji_add, Emoji_delete, Emoji_get_all, Emoji_update, Emoji_get_filename, Emoji_get_id
 from handlers.websocket_utils import broadcast_to_voice_channel_with_viewers, broadcast_to_all
+from handlers import push as push_handler
 from typing import TypeVar
 
 T = TypeVar("T")
@@ -219,7 +220,6 @@ async def handle(ws, message, server_data=None):
                     return _error(f"Message too long. Maximum length is {max_length} characters", match_cmd)
 
                 # Check role mention permissions
-                import re
                 role_mentions = re.findall(r'@&([a-zA-Z0-9_]+)', content)
                 for mentioned_role in role_mentions:
                     if not roles.role_exists(mentioned_role):
@@ -281,6 +281,31 @@ async def handle(ws, message, server_data=None):
                         "username": username,
                         "message": out_msg
                     }, server_data)
+
+                mentioned_usernames = set(re.findall(r'(?<!&)@([a-zA-Z0-9_]+)', content))
+                for mentioned_username in mentioned_usernames:
+                    if mentioned_username == username:
+                        continue
+                    if not push_handler.is_user_online(mentioned_username, server_data):
+                        push_handler.send_push_notification(
+                            username=mentioned_username,
+                            title=f"#{channel_name} \u2014 {username}",
+                            body=content,
+                            extra_data={"channelName": channel_name},
+                        )
+
+                if reply_to and replied_message:
+                    original_author_id = replied_message.get("user")
+                    original_author = users.get_username_by_id(original_author_id) if original_author_id else None
+                    ping_flag = message.get("ping", True)
+                    if ping_flag and original_author and original_author != username:
+                        if not push_handler.is_user_online(original_author, server_data):
+                            push_handler.send_push_notification(
+                                username=original_author,
+                                title=f"#{channel_name} \u2014 {username} replied",
+                                body=content,
+                                extra_data={"channelName": channel_name},
+                            )
 
                 # Optionally broadcast to all clients
                 return {"cmd": "message_new", "message": out_msg_for_client, "channel": channel_name, "global": True}
@@ -1877,5 +1902,11 @@ async def handle(ws, message, server_data=None):
                     return {"cmd": "emoji_get_id", "name": emoji_get_id_command.name, "id": emoji_id}
                 except ValidationError as e:
                     return _error(f"Invalid emoji_get_id command scheme: {str(e)}", match_cmd)
+            case "push_get_vapid":
+                return await push_handler.handle_push_get_vapid(ws)
+            case "push_subscribe":
+                return await push_handler.handle_push_subscribe(ws, message)
+            case "push_unsubscribe":
+                return await push_handler.handle_push_unsubscribe(ws, message)
             case _:
                 return _error(f"Unknown command: {message.get('cmd')}", match_cmd)

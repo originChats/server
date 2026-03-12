@@ -167,6 +167,16 @@ To add a new config value:
 | `slash_list` | List all registered slash commands | [View](commands/slash_list.md) |
 | `slash_call` | Execute a slash command | [View](commands/slash_call.md) |
 
+### Push Notifications
+
+| Command | Description | Documentation |
+|---------|-------------|---------------|
+| `push_get_vapid` | Request the server's VAPID public key | [View](commands/push_get_vapid.md) |
+| `push_subscribe` | Register a Web Push subscription | [View](commands/push_subscribe.md) |
+| `push_unsubscribe` | Remove a Web Push subscription | [View](commands/push_unsubscribe.md) |
+
+For a full overview of the feature including server setup, payload format, and client integration, see the [Web Push Notifications guide](push_notifications.md).
+
 ---
 
 ## Data Structures
