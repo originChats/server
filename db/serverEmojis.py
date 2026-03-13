@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import re
@@ -27,18 +28,25 @@ def get_allowed_file_types() -> list[str]:
         normalized = _normalize_extension(file_type)
         if normalized and normalized not in normalized_types:
             normalized_types.append(normalized)
-
     return normalized_types or ["gif", "jpg", "jpeg"]
 
 def _ensure_storage() -> None:
     os.makedirs(server_emojis_db, exist_ok=True)
     if not os.path.exists(server_emojis_index):
-        with open(server_emojis_index, "w") as f:
+        tmp = server_emojis_index + ".tmp"
+        with open(tmp, "w") as f:
             json.dump({}, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, server_emojis_index)
 
 def _write_emojis(emojis: Dict[str, Dict[str, Any]]) -> None:
-    with open(server_emojis_index, "w") as f:
+    tmp = server_emojis_index + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(emojis, f, indent=4)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, server_emojis_index)
 
 def _normalize_name(name: str) -> str:
     return str(name).strip()
@@ -136,12 +144,16 @@ def _download_emoji(b64_image: str) -> str | None:
         img_data = base64.b64decode(b64_image.split(',', 1)[-1])
         image = Image.open(BytesIO(img_data))
         extension = image.format.lower() if image.format else 'jpg'
-        
-        path = os.path.join("db", os.path.join("serverEmojis", f"{_next_emoji_id}.{extension}"))
+
+        with _emoji_lock:
+            emojis = get_emojis()
+            new_id = _next_emoji_id(emojis)
+
+        path = os.path.join(server_emojis_db, f"{new_id}.{extension}")
         image.save(path)
         return path
     except Exception as e:
-        Logger.error("Failed to save image: {e}")
+        Logger.error(f"Failed to save image: {e}")
         return None
     
 def _add_emoji_by_filepath(name: str, file_name: str) -> Optional[str]:
@@ -174,9 +186,10 @@ def _add_emoji_by_filepath(name: str, file_name: str) -> Optional[str]:
             "fileName": file_name
         }
 
-        emojis[emoji_id] = entry
-        _write_emojis(emojis)
-        _generate_name_to_id(emojis)
+        new_emojis = dict(emojis)
+        new_emojis[emoji_id] = entry
+        _write_emojis(new_emojis)
+        _generate_name_to_id(new_emojis)
         return emoji_id
 
 def add_emoji(name: str, b64_image: str) -> Optional[str]:
@@ -211,7 +224,8 @@ def update_emoji(emoji_id: str | int, updates: Dict[str, Any]) -> bool:
         if emoji_id not in emojis:
             return False
 
-        current = emojis[emoji_id]
+        new_emojis = copy.deepcopy(emojis)
+        current = new_emojis[emoji_id]
 
         if "name" in updates:
             new_name = _normalize_name(updates["name"])
@@ -228,28 +242,37 @@ def update_emoji(emoji_id: str | int, updates: Dict[str, Any]) -> bool:
                 return False
             current["fileName"] = new_file
 
-        emojis[emoji_id] = current
-        _write_emojis(emojis)
-        _generate_name_to_id(emojis)
+        _write_emojis(new_emojis)
+        _generate_name_to_id(new_emojis)
         return True
+
 
 def remove_emoji(emoji_id: str | int, delete_file: bool = False) -> bool:
     emoji_id = str(emoji_id)
+    file_path = None
+
     with _emoji_lock:
         emojis = get_emojis()
         if emoji_id not in emojis:
             return False
 
         file_name = emojis[emoji_id].get("fileName")
-        file_path = os.path.join(server_emojis_db, file_name) if file_name else None
-        del emojis[emoji_id]
-        _write_emojis(emojis)
-        _generate_name_to_id(emojis)
+        if file_name:
+            file_path = os.path.join(server_emojis_db, file_name)
+
+        new_emojis = dict(emojis)
+        del new_emojis[emoji_id]
+        _write_emojis(new_emojis)
+        _generate_name_to_id(new_emojis)
 
     if delete_file and file_path and os.path.isfile(file_path):
-        os.remove(file_path)
+        try:
+            os.remove(file_path)
+        except OSError:
+            pass
 
     return True
+
 
 def is_valid_emoji_value(value: str) -> bool:
     """

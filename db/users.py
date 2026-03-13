@@ -1,4 +1,9 @@
-import json, os, secrets
+import copy
+import json
+import os
+import secrets
+import threading
+from typing import Dict, Optional
 from . import roles
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -9,11 +14,46 @@ _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 users_index = os.path.join(_MODULE_DIR, "users.json")
 DEFAULT_USERS = {}
 
+_lock = threading.RLock()
+
+_users_cache: Dict[str, dict] = {}
+_users_loaded: bool = False
+
+def _load_users() -> Dict[str, dict]:
+    global _users_cache, _users_loaded
+    try:
+        with open(users_index, "r") as f:
+            _users_cache = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        _users_cache = {}
+    _users_loaded = True
+    return _users_cache
+
+def _save_users(users_dict: Dict[str, dict]) -> None:
+    global _users_cache, _users_loaded
+    tmp = users_index + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(users_dict, f, indent=4)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, users_index)
+    _users_cache = users_dict
+    _users_loaded = True
+
+def _get_users_cache() -> Dict[str, dict]:
+    if not _users_loaded:
+        _load_users()
+    return _users_cache
+
 def _ensure_storage():
     os.makedirs(_MODULE_DIR, exist_ok=True)
     if not os.path.exists(users_index):
-        with open(users_index, "w") as f:
+        tmp = users_index + ".tmp"
+        with open(tmp, "w") as f:
             json.dump(DEFAULT_USERS, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, users_index)
 
 _ensure_storage()
 
@@ -21,52 +61,37 @@ def user_exists(user_id):
     """
     Check if a user exists in the users database.
     """
-    try:
-        with open(users_index, "r") as f:
-            users = json.load(f)
-        return user_id in users
-    except FileNotFoundError:
-        return False
+    with _lock:
+        return user_id in _get_users_cache()
 
 def get_user(user_id):
     """
     Get user data by user ID.
     """
-    try:
-        with open(users_index, "r") as f:
-            users = json.load(f)
-        return users.get(user_id, None)
-    except FileNotFoundError:
-        return None
+    with _lock:
+        user = _get_users_cache().get(user_id)
+        return copy.deepcopy(user) if user is not None else None
 
 def add_user(user_id, username=None):
     """
     Add a new user to the users database.
     """
-    try:
-        with open(users_index, "r") as f:
-            users = json.load(f)
-    except FileNotFoundError:
-        users = {}
+    with _lock:
+        users = _get_users_cache()
 
-    if user_id in users:
-        return False  # User already exists
+        if user_id in users:
+            return False
 
-    # Create user data with username
-    user_data = get_config_value("DB", "users", "default", default={}).copy()
-    
-    # If username is provided but different from ID (for backward compatibility)
-    # or if user_data already has a username field from legacy data
-    if username:
-        user_data["username"] = username
-    elif "username" not in user_data:
-        user_data["username"] = user_id  # Legacy: ID was username
-    
-    users[user_id] = user_data
+        user_data = get_config_value("DB", "users", "default", default={}).copy()
 
-    with open(users_index, "w") as f:
-        json.dump(users, f, indent=4)
+        if username:
+            user_data["username"] = username
+        elif "username" not in user_data:
+            user_data["username"] = user_id
 
+        new_users = dict(users)
+        new_users[user_id] = user_data
+        _save_users(new_users)
     return True
 
 def get_user_roles(user_id):
@@ -78,16 +103,19 @@ def get_user_roles(user_id):
         return user.get("roles", [])
     return []
 
+
 def get_users():
     """
     Get all users from the users database.
     """
-    try:
-        with open(users_index, "r") as f:
-            users = json.load(f)
+    with _lock:
+        users = _get_users_cache()
 
-        for _, user_data in users.items():
-            # Get the color of the first role
+        user_arr = []
+        for user_id, user_data in users.items():
+            if "banned" in user_data.get("roles", []):
+                continue
+
             user_roles = user_data.get("roles", [])
             color = None
             if user_roles:
@@ -95,56 +123,36 @@ def get_users():
                 first_role_data = roles.get_role(first_role_name)
                 if first_role_data:
                     color = first_role_data.get("color")
-            user_data["color"] = color
 
-        user_arr = []
-        for user_id, user_data in users.items():
-            if "banned" in user_data.get("roles", []):
-                continue
-            # Use username field if available, otherwise fall back to user_id (legacy)
             username = user_data.get("username", user_id)
             user_arr.append({
                 "username": username,
-                "roles": user_data.get("roles", []),
-                "color": user_data.get("color")
+                "roles": list(user_roles),
+                "color": color,
             })
-        return user_arr
-    except FileNotFoundError:
-        return []
-    
+    return user_arr
+
 def save_user(user_id, user_data):
     """
     Save user data to the users database.
     """
-    try:
-        with open(users_index, "r") as f:
-            users = json.load(f)
-    except FileNotFoundError:
-        users = {}
+    with _lock:
+        new_users = dict(_get_users_cache())
+        new_users[user_id] = user_data
+        _save_users(new_users)
 
-    users[user_id] = user_data
-
-    with open(users_index, "w") as f:
-        json.dump(users, f, indent=4)
-    
 def get_banned_users():
     """
     Get a list of all banned users.
     """
-    try:
-        with open(users_index, "r") as f:
-            users_data = json.load(f)
-        
-        banned_users = []
-        for user_id, user_data in users_data.items():
+    with _lock:
+        users = _get_users_cache()
+        banned = []
+        for user_id, user_data in users.items():
             if "banned" in user_data.get("roles", []):
-                # Use username if available, otherwise fall back to ID
                 username = user_data.get("username", user_id)
-                banned_users.append(username)
-        
-        return banned_users
-    except FileNotFoundError:
-        return []
+                banned.append(username)
+    return banned
 
 def is_user_banned(user_id):
     """
@@ -159,45 +167,49 @@ def ban_user(user_id):
     """
     Ban a user by giving them the 'banned' role.
     """
-    user = get_user(user_id)
-    if user and "banned" not in user.get("roles", []):
-        user["roles"].insert(0, "banned")
-        save_user(user_id, user)
-        return True
+    with _lock:
+        user = get_user(user_id)
+        if user and "banned" not in user.get("roles", []):
+            user["roles"].insert(0, "banned")
+            save_user(user_id, user)
+            return True
     return False
 
 def unban_user(user_id):
     """
     Unban a user by removing the 'banned' role.
     """
-    user = get_user(user_id)
-    if user and "banned" in user["roles"]:
-        user["roles"].remove("banned")
-        save_user(user_id, user)
-        return True
+    with _lock:
+        user = get_user(user_id)
+        if user and "banned" in user["roles"]:
+            user["roles"].remove("banned")
+            save_user(user_id, user)
+            return True
     return False
 
 def give_role(user_id, role):
     """
     Give a user a role.
     """
-    user = get_user(user_id)
-    if user:
-        user["roles"].insert(0, role)
-        save_user(user_id, user)
-        return True
+    with _lock:
+        user = get_user(user_id)
+        if user:
+            user["roles"].insert(0, role)
+            save_user(user_id, user)
+            return True
     return False
 
 def remove_role(user_id, role):
     """
     Remove a role from a user.
     """
-    user = get_user(user_id)
-    if user:
-        if role in user["roles"]:
-            user["roles"].remove(role)
-            save_user(user_id, user)
-            return True
+    with _lock:
+        user = get_user(user_id)
+        if user:
+            if role in user["roles"]:
+                user["roles"].remove(role)
+                save_user(user_id, user)
+                return True
     return False
 
 def remove_user_roles(user_id, roles_to_remove):
@@ -211,56 +223,50 @@ def remove_user_roles(user_id, roles_to_remove):
     Returns:
         bool: True if at least one role was removed, False otherwise.
     """
-    user = get_user(user_id)
-    if not user:
-        return False
-    
-    current_roles = user.get("roles", [])
-    removed_any = False
-    
-    for role in roles_to_remove:
-        if role in current_roles:
-            current_roles.remove(role)
-            removed_any = True
-    
-    if removed_any:
-        user["roles"] = current_roles
-        save_user(user_id, user)
-        return True
-    
+    with _lock:
+        user = get_user(user_id)
+        if not user:
+            return False
+
+        current_roles = user.get("roles", [])
+        removed_any = False
+
+        for role in roles_to_remove:
+            if role in current_roles:
+                current_roles.remove(role)
+                removed_any = True
+
+        if removed_any:
+            user["roles"] = current_roles
+            save_user(user_id, user)
+            return True
+
     return False
 
 def remove_user(user_id):
     """
     Remove a user from the users database.
     """
-    try:
-        with open(users_index, "r") as f:
-            users = json.load(f)
-
-        users.pop(user_id, None)
-
-        with open(users_index, "w") as f:
-            json.dump(users, f, indent=4)
-    except FileNotFoundError:
-        return False
+    with _lock:
+        users = _get_users_cache()
+        if user_id not in users:
+            return False
+        new_users = dict(users)
+        new_users.pop(user_id, None)
+        _save_users(new_users)
     return True
 
 def get_id_by_username(username):
     """
     Get a user's ID by their username.
     """
-    try:
-        with open(users_index, "r") as f:
-            users = json.load(f)
-        
-        username = username.lower()
+    with _lock:
+        users = _get_users_cache()
+        username_lower = username.lower()
         for user_id, user_data in users.items():
-            if user_data.get("username", "").lower() == username:
+            if user_data.get("username", "").lower() == username_lower:
                 return user_id
-        return None
-    except FileNotFoundError:
-        return None
+    return None
 
 def get_username_by_id(user_id):
     """
@@ -269,21 +275,22 @@ def get_username_by_id(user_id):
     user = get_user(user_id)
     if user:
         result = user.get("username", "")
-        # Fallback: if username field is missing, use user_id (for legacy compatibility)
-        if not result or result == "":
+        if not result:
             return user_id
         return result
-    return user_id  # Fallback to ID if user not found
+    return user_id
+
 
 def update_user_username(user_id, new_username):
     """
     Update a user's username. This handles username changes.
     """
-    user = get_user(user_id)
-    if user:
-        user["username"] = new_username
-        save_user(user_id, user)
-        return True
+    with _lock:
+        user = get_user(user_id)
+        if user:
+            user["username"] = new_username
+            save_user(user_id, user)
+            return True
     return False
 
 def generate_validator(user_id):
@@ -297,13 +304,14 @@ def generate_validator(user_id):
     Returns:
         str: The generated validator token, or None if the user does not exist.
     """
-    user = get_user(user_id)
-    if not user:
-        return None
+    with _lock:
+        user = get_user(user_id)
+        if not user:
+            return None
 
-    validator = secrets.token_urlsafe(32)
-    user["validator"] = validator
-    save_user(user_id, user)
+        validator = secrets.token_urlsafe(32)
+        user["validator"] = validator
+        save_user(user_id, user)
     return validator
 
 def get_validator(user_id):

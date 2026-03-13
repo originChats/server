@@ -1,4 +1,8 @@
-import json, os
+import copy
+import json
+import os
+import threading
+from typing import Dict, List, Optional
 from . import users
 import emoji
 
@@ -18,21 +22,243 @@ DEFAULT_CHANNELS = [
     }
 ]
 
+_lock = threading.RLock()
+
+_channels_cache: List[dict] = []
+_channels_loaded: bool = False
+
+
+def _load_channels_index() -> List[dict]:
+    global _channels_cache, _channels_loaded
+    try:
+        with open(channels_index, 'r') as f:
+            _channels_cache = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        _channels_cache = copy.deepcopy(DEFAULT_CHANNELS)
+    _channels_loaded = True
+    return _channels_cache
+
+
+def _save_channels_index(channels: List[dict]) -> None:
+    global _channels_cache, _channels_loaded
+    tmp = channels_index + ".tmp"
+    with open(tmp, 'w') as f:
+        json.dump(channels, f, indent=4)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, channels_index)
+    _channels_cache = channels
+    _channels_loaded = True
+
+
+def _get_channels_cache() -> List[dict]:
+    if not _channels_loaded:
+        _load_channels_index()
+    return _channels_cache
+
+
+_msg_cache: Dict[str, dict] = {}
+
+
+def _build_id_index(messages):
+    return {msg["id"]: i for i, msg in enumerate(messages) if "id" in msg}
+
+
+def _load_channel_into_cache(channel_name):
+    channel_file = os.path.join(channels_db_dir, channel_name + ".json")
+    messages = []
+    offsets = []
+    lengths = []
+
+    try:
+        with open(channel_file, 'rb') as f:
+            raw = f.read()
+    except FileNotFoundError:
+        _msg_cache[channel_name] = {
+            "messages": [],
+            "id_to_idx": {},
+            "offsets": [],
+            "lengths": [],
+        }
+        return _msg_cache[channel_name]
+
+    if not raw.strip():
+        _msg_cache[channel_name] = {
+            "messages": [],
+            "id_to_idx": {},
+            "offsets": [],
+            "lengths": [],
+        }
+        return _msg_cache[channel_name]
+
+    stripped = raw.lstrip()
+    if stripped.startswith(b'['):
+        try:
+            messages = json.loads(raw.decode('utf-8'))
+        except json.JSONDecodeError:
+            messages = []
+        entry = {
+            "messages": messages,
+            "id_to_idx": _build_id_index(messages),
+            "offsets": None,
+            "lengths": None,
+        }
+        _msg_cache[channel_name] = entry
+        _full_rewrite(channel_name)
+        return _msg_cache[channel_name]
+
+    pos = 0
+    for line_bytes in raw.split(b'\n'):
+        content_bytes = line_bytes.rstrip(b'\r')
+        line_str = content_bytes.decode('utf-8').strip()
+        if line_str:
+            try:
+                msg = json.loads(line_str)
+                messages.append(msg)
+                offsets.append(pos)
+                lengths.append(len(content_bytes))
+            except json.JSONDecodeError:
+                pass
+        pos += len(line_bytes) + 1
+
+    _msg_cache[channel_name] = {
+        "messages": messages,
+        "id_to_idx": _build_id_index(messages),
+        "offsets": offsets,
+        "lengths": lengths,
+    }
+    return _msg_cache[channel_name]
+
+
+def _get_channel_cache(channel_name):
+    if channel_name not in _msg_cache:
+        _load_channel_into_cache(channel_name)
+    return _msg_cache[channel_name]
+
+
+def _full_rewrite(channel_name):
+    cache = _msg_cache.get(channel_name)
+    if cache is None:
+        return
+
+    messages = cache["messages"]
+    os.makedirs(channels_db_dir, exist_ok=True)
+    channel_file = os.path.join(channels_db_dir, channel_name + ".json")
+    tmp = channel_file + ".tmp"
+
+    lines = [json.dumps(msg, separators=(',', ':'), ensure_ascii=False) for msg in messages]
+    encoded_lines = [line.encode('utf-8') for line in lines]
+    content_bytes = b'\n'.join(encoded_lines)
+
+    with open(tmp, 'wb') as f:
+        f.write(content_bytes)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, channel_file)
+
+    offsets = []
+    lengths = []
+    pos = 0
+    for lb in encoded_lines:
+        offsets.append(pos)
+        lengths.append(len(lb))
+        pos += len(lb) + 1
+
+    cache["offsets"] = offsets
+    cache["lengths"] = lengths
+
+
+def _rebuild_offsets(channel_name):
+    cache = _msg_cache.get(channel_name)
+    if cache is None:
+        return
+
+    channel_file = os.path.join(channels_db_dir, channel_name + ".json")
+    offsets = []
+    lengths = []
+    try:
+        with open(channel_file, 'rb') as f:
+            raw = f.read()
+    except OSError:
+        return
+
+    pos = 0
+    for line_bytes in raw.split(b'\n'):
+        content_bytes = line_bytes.rstrip(b'\r')
+        if content_bytes.strip():
+            offsets.append(pos)
+            lengths.append(len(content_bytes))
+        pos += len(line_bytes) + 1
+
+    cache["offsets"] = offsets
+    cache["lengths"] = lengths
+
+
+def _patch_line_in_place(channel_name, idx, new_serialised):
+    cache = _msg_cache.get(channel_name)
+    if cache is None or cache["offsets"] is None:
+        return False
+
+    offsets = cache["offsets"]
+    lengths = cache["lengths"]
+
+    if idx >= len(offsets):
+        return False
+
+    new_bytes = new_serialised.encode('utf-8')
+    orig_len = lengths[idx]
+
+    if len(new_bytes) > orig_len:
+        return False
+
+    padding = orig_len - len(new_bytes)
+    if padding > 0:
+        new_bytes = new_bytes + b' ' * padding
+
+    channel_file = os.path.join(channels_db_dir, channel_name + ".json")
+    try:
+        with open(channel_file, 'r+b') as f:
+            f.seek(offsets[idx])
+            f.write(new_bytes)
+            f.flush()
+            os.fsync(f.fileno())
+        return True
+    except OSError:
+        return False
+
+
+def _read_channel_file(channel_name):
+    return list(_get_channel_cache(channel_name)["messages"])
+
+
+def _write_channel_file(channel_name, messages):
+    with _lock:
+        cache = _get_channel_cache(channel_name)
+        old_messages = cache["messages"]
+        old_id_to_idx = cache["id_to_idx"]
+        cache["messages"] = messages
+        cache["id_to_idx"] = _build_id_index(messages)
+        try:
+            _full_rewrite(channel_name)
+        except Exception:
+            cache["messages"] = old_messages
+            cache["id_to_idx"] = old_id_to_idx
+            raise
+
+
 def _ensure_storage():
     os.makedirs(_MODULE_DIR, exist_ok=True)
     os.makedirs(channels_db_dir, exist_ok=True)
 
     if not os.path.exists(channels_index):
-        with open(channels_index, 'w') as f:
+        tmp = channels_index + ".tmp"
+        with open(tmp, 'w') as f:
             json.dump(DEFAULT_CHANNELS, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, channels_index)
 
-    try:
-        with open(channels_index, 'r') as f:
-            channels = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        channels = DEFAULT_CHANNELS
-        with open(channels_index, 'w') as f:
-            json.dump(channels, f, indent=4)
+    channels = _get_channels_cache()
 
     for channel in channels:
         if channel.get("type") not in ["text", "voice"]:
@@ -40,61 +266,27 @@ def _ensure_storage():
         channel_name = channel.get("name")
         if not channel_name:
             continue
-        channel_file = f"{channels_db_dir}/{channel_name}.json"
+        channel_file = os.path.join(channels_db_dir, channel_name + ".json")
         if not os.path.exists(channel_file):
-            with open(channel_file, 'w') as f:
-                f.write('')
+            tmp = channel_file + ".tmp"
+            with open(tmp, 'wb') as f:
+                pass
+            os.replace(tmp, channel_file)
+
 
 _ensure_storage()
+
 
 def get_channel(channel_name):
     """
     Get channel data by channel name.
     """
-    data = get_channels()
-    for channel in data:
-        if channel.get("name") == channel_name:
-            return channel
-    return None
+    with _lock:
+        for channel in _get_channels_cache():
+            if channel.get("name") == channel_name:
+                return copy.deepcopy(channel)
+        return None
 
-def _read_channel_file(channel_name):
-    """
-    Read channel file with auto-migration.
-    Supports both newline-separated JSON and old array format.
-    Automatically migrates old format to new format.
-    """
-    channel_file = f"{channels_db_dir}/{channel_name}.json"
-    try:
-        with open(channel_file, 'r') as f:
-            content = f.read()
-        
-        if not content.strip():
-            return []
-        
-        if content.strip().startswith('['):
-            channel_data = json.loads(content)
-            
-            _write_channel_file(channel_name, channel_data)
-            
-            return channel_data
-        else:
-            return [json.loads(line) for line in content.strip().split('\n') if line.strip()]
-    
-    except FileNotFoundError:
-        return []
-    except json.JSONDecodeError:
-        return []
-
-def _write_channel_file(channel_name, messages):
-    """
-    Write messages to channel file in newline-separated JSON format.
-    """
-    os.makedirs(channels_db_dir, exist_ok=True)
-    channel_file = f"{channels_db_dir}/{channel_name}.json"
-    
-    with open(channel_file, 'w') as f:
-        lines = [json.dumps(msg, separators=(',', ':'), ensure_ascii=False) for msg in messages]
-        f.write('\n'.join(lines))
 
 def get_channel_messages(channel_name, start, limit):
     """
@@ -110,81 +302,83 @@ def get_channel_messages(channel_name, start, limit):
     Returns:
         list: A list of messages from the specified channel, in chronological order (oldest first).
     """
-    channel_data = _read_channel_file(channel_name)
-    
-    if not channel_data:
-        return []
+    with _lock:
+        cache = _get_channel_cache(channel_name)
+        channel_data = cache["messages"]
 
-    if not limit:
-        limit = 100
-
-    if limit > 200:
-        limit = 200
-
-    if isinstance(start, int):
-        if start < 0:
-            start = 0
-        end = len(channel_data) - start
-        begin = max(0, end - limit)
-    else:
-        index = None
-        for i, msg in enumerate(channel_data):
-            if msg.get('id') == start:
-                index = i
-                break
-        if index is None:
+        if not channel_data:
             return []
-        end = index
-        begin = max(0, end - limit)
 
-    channel_data_len = len(channel_data)
-    if begin > channel_data_len:
-        return []
-    if end > channel_data_len:
-        end = channel_data_len
+        if not limit:
+            limit = 100
+        if limit > 200:
+            limit = 200
 
-    if begin < 0:
-        begin = 0
-    if end < 0:
-        end = 0
+        if isinstance(start, int):
+            if start < 0:
+                start = 0
+            end = len(channel_data) - start
+            begin = max(0, end - limit)
+        else:
+            idx = cache["id_to_idx"].get(start)
+            if idx is None:
+                return []
+            end = idx
+            begin = max(0, end - limit)
 
-    if begin == end:
-        return []
+        channel_data_len = len(channel_data)
+        if begin > channel_data_len:
+            return []
+        end = min(end, channel_data_len)
+        begin = max(begin, 0)
+        end = max(end, 0)
 
-    return channel_data[begin:end]
+        if begin == end:
+            return []
+
+        return list(channel_data[begin:end])
+
 
 def convert_messages_to_user_format(messages):
     """
     Convert messages with user IDs to messages with usernames for sending to clients.
     This ensures clients never see user IDs, only usernames.
     """
+    user_ids_needed = set()
+    for msg in messages:
+        if "user" in msg:
+            user_ids_needed.add(msg["user"])
+        if "reply_to" in msg and "user" in msg["reply_to"]:
+            user_ids_needed.add(msg["reply_to"]["user"])
+        if "reactions" in msg:
+            for uid_list in msg["reactions"].values():
+                user_ids_needed.update(uid_list)
+
+    uid_to_name = {uid: users.get_username_by_id(uid) for uid in user_ids_needed}
+
     converted = []
     for msg in messages:
         msg_copy = msg.copy()
 
         if "user" in msg_copy:
-            user_id = msg_copy["user"]
-            username = users.get_username_by_id(user_id)
-            msg_copy["user"] = username if username else user_id
+            uid = msg_copy["user"]
+            msg_copy["user"] = uid_to_name.get(uid) or uid
 
         if "reply_to" in msg_copy and "user" in msg_copy["reply_to"]:
-            user_id = msg_copy["reply_to"]["user"]
-            username = users.get_username_by_id(user_id)
-            msg_copy["reply_to"]["user"] = username if username else user_id
+            msg_copy["reply_to"] = msg_copy["reply_to"].copy()
+            uid = msg_copy["reply_to"]["user"]
+            msg_copy["reply_to"]["user"] = uid_to_name.get(uid) or uid
 
         if "reactions" in msg_copy:
             converted_reactions = {}
-            for emoji, user_ids in msg_copy["reactions"].items():
-                usernames = []
-                for uid in user_ids:
-                    username = users.get_username_by_id(uid)
-                    usernames.append(username if username else uid)
-                converted_reactions[emoji] = usernames
+            for emo, uid_list in msg_copy["reactions"].items():
+                converted_reactions[emo] = [uid_to_name.get(u) or u for u in uid_list]
             msg_copy["reactions"] = converted_reactions
 
         converted.append(msg_copy)
 
     return converted
+
 
 def save_channel_message(channel_name, message):
     """
@@ -198,25 +392,69 @@ def save_channel_message(channel_name, message):
     Returns:
         bool: True if the message was saved successfully, False otherwise.
     """
-    channel_file = f"{channels_db_dir}/{channel_name}.json"
+    channel_file = os.path.join(channels_db_dir, channel_name + ".json")
     os.makedirs(channels_db_dir, exist_ok=True)
-    
-    if os.path.exists(channel_file):
-        with open(channel_file, 'r') as f:
-            first_char = f.read(1)
-        
-        if first_char == '[':
-            channel_data = _read_channel_file(channel_name)
-            channel_data.append(message)
-            _write_channel_file(channel_name, channel_data)
+
+    with _lock:
+        cache = _get_channel_cache(channel_name)
+        messages = cache["messages"]
+
+        serialised = json.dumps(message, separators=(',', ':'), ensure_ascii=False)
+        serialised_bytes = serialised.encode('utf-8')
+
+        try:
+            with open(channel_file, 'rb') as f:
+                first_byte = f.read(1)
+        except FileNotFoundError:
+            first_byte = None
+
+        if first_byte == b'[':
+            messages.append(message)
+            cache["id_to_idx"][message["id"]] = len(messages) - 1
+            try:
+                _full_rewrite(channel_name)
+            except Exception:
+                messages.pop()
+                cache["id_to_idx"].pop(message["id"], None)
+                raise
+        elif first_byte is not None:
+            new_offset: Optional[int] = None
+            if cache["offsets"] is not None:
+                if messages:
+                    new_offset = cache["offsets"][-1] + cache["lengths"][-1] + 1
+                else:
+                    new_offset = 0
+
+            prefix = b'\n' if messages else b''
+            with open(channel_file, 'ab') as f:
+                f.write(prefix + serialised_bytes)
+                f.flush()
+                os.fsync(f.fileno())
+
+            idx = len(messages)
+            messages.append(message)
+            cache["id_to_idx"][message["id"]] = idx
+            if cache["offsets"] is not None and new_offset is not None:
+                cache["offsets"].append(new_offset)
+                cache["lengths"].append(len(serialised_bytes))
+            elif cache["offsets"] is None:
+                _rebuild_offsets(channel_name)
         else:
-            with open(channel_file, 'a') as f:
-                f.write('\n' + json.dumps(message, separators=(',', ':'), ensure_ascii=False))
-    else:
-        with open(channel_file, 'w') as f:
-            f.write(json.dumps(message, separators=(',', ':'), ensure_ascii=False))
-    
+            tmp = channel_file + ".tmp"
+            with open(tmp, 'wb') as f:
+                f.write(serialised_bytes)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, channel_file)
+
+            messages.append(message)
+            cache["id_to_idx"][message["id"]] = 0
+            if cache["offsets"] is not None:
+                cache["offsets"] = [0]
+                cache["lengths"] = [len(serialised_bytes)]
+
     return True
+
 
 def get_all_channels_for_roles(roles):
     """
@@ -228,18 +466,15 @@ def get_all_channels_for_roles(roles):
     Returns:
         list: A list of channel info dicts available for the specified roles.
     """
-    channels = []
-    try:
-        with open(channels_index, 'r') as f:
-            all_channels = json.load(f)
-        for channel in all_channels:
+    with _lock:
+        channels = []
+        for channel in _get_channels_cache():
             permissions = channel.get("permissions", {})
             view_roles = permissions.get("view", [])
             if any(role in view_roles for role in roles):
-                channels.append(channel)
-    except FileNotFoundError:
-        return []
-    return channels
+                channels.append(copy.deepcopy(channel))
+        return channels
+
 
 def edit_channel_message(channel_name, message_id, new_content):
     """
@@ -253,19 +488,33 @@ def edit_channel_message(channel_name, message_id, new_content):
     Returns:
         bool: True if the message was edited successfully, False otherwise.
     """
-    channel_data = _read_channel_file(channel_name)
+    with _lock:
+        cache = _get_channel_cache(channel_name)
+        id_to_idx = cache["id_to_idx"]
 
-    for msg in channel_data:
-        if msg.get("id") == message_id:
-            msg["content"] = new_content
-            msg["edited"] = True
-            break
-    else:
-        return False # Message not found
+        if message_id not in id_to_idx:
+            return False
 
-    _write_channel_file(channel_name, channel_data)
+        idx = id_to_idx[message_id]
+        old_msg = cache["messages"][idx]
+        msg = copy.deepcopy(old_msg)
+        msg["content"] = new_content
+        msg["edited"] = True
 
-    return True
+        new_serialised = json.dumps(msg, separators=(',', ':'), ensure_ascii=False)
+
+        if _patch_line_in_place(channel_name, idx, new_serialised):
+            cache["messages"][idx] = msg
+        else:
+            cache["messages"][idx] = msg
+            try:
+                _full_rewrite(channel_name)
+            except Exception:
+                cache["messages"][idx] = old_msg
+                raise
+
+        return True
+
 
 def get_channel_message(channel_name, message_id):
     """
@@ -278,15 +527,15 @@ def get_channel_message(channel_name, message_id):
     Returns:
         dict: The message if found, None otherwise.
     """
-    channel_data = _read_channel_file(channel_name)
+    with _lock:
+        cache = _get_channel_cache(channel_name)
+        idx = cache["id_to_idx"].get(message_id)
+        if idx is None:
+            return None
+        msg = copy.deepcopy(cache["messages"][idx])
+        msg["position"] = idx + 1
+        return msg
 
-    i = 0
-    for msg in channel_data:
-        i += 1
-        if msg.get("id") == message_id:
-            msg["position"] = i
-            return msg
-    return None # Message not found
 
 def does_user_have_permission(channel_name, user_roles, permission_type):
     """
@@ -302,19 +551,14 @@ def does_user_have_permission(channel_name, user_roles, permission_type):
     """
     if "owner" in user_roles:
         return True
-    try:
-        with open(channels_index, 'r') as f:
-            channels_data = json.load(f)
-
-        for channel in channels_data:
+    with _lock:
+        for channel in _get_channels_cache():
             if channel.get("name") == channel_name:
                 permissions = channel.get("permissions", {})
                 allowed_roles = permissions.get(permission_type, [])
                 return any(role in allowed_roles for role in user_roles)
-    except FileNotFoundError:
-        return False # Channel index not found
+    return False
 
-    return False # Channel not found
 
 def delete_channel_message(channel_name, message_id):
     """
@@ -327,13 +571,27 @@ def delete_channel_message(channel_name, message_id):
     Returns:
         bool: True if the message was deleted successfully, False otherwise.
     """
-    channel_data = _read_channel_file(channel_name)
+    with _lock:
+        cache = _get_channel_cache(channel_name)
 
-    new_data = [msg for msg in channel_data if msg.get("id") != message_id]
+        if message_id not in cache["id_to_idx"]:
+            return True
 
-    _write_channel_file(channel_name, new_data)
+        new_messages = [m for m in cache["messages"] if m.get("id") != message_id]
+        old_messages = cache["messages"]
+        old_id_to_idx = cache["id_to_idx"]
+
+        cache["messages"] = new_messages
+        cache["id_to_idx"] = _build_id_index(new_messages)
+        try:
+            _full_rewrite(channel_name)
+        except Exception:
+            cache["messages"] = old_messages
+            cache["id_to_idx"] = old_id_to_idx
+            raise
 
     return True
+
 
 def get_channels():
     """
@@ -342,11 +600,9 @@ def get_channels():
     Returns:
         list: A list of channel info dicts.
     """
-    try:
-        with open(channels_index, 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return [] # No channels found
+    with _lock:
+        return copy.deepcopy(_get_channels_cache())
+
 
 def create_channel(channel_name, channel_type, description=None, wallpaper=None, permissions=None, size=None):
     """
@@ -363,67 +619,61 @@ def create_channel(channel_name, channel_type, description=None, wallpaper=None,
     Returns:
         bool: True if the channel was created successfully, False if it already exists.
     """
-    try:
-        with open(channels_index, 'r') as f:
-            channels = json.load(f)
-    except FileNotFoundError:
-        channels = []
+    with _lock:
+        channels = copy.deepcopy(_get_channels_cache())
 
-    # Check if the channel already exists
-    if any(channel.get('name') == channel_name for channel in channels):
-        return False # Channel already exists
+        if any(channel.get('name') == channel_name for channel in channels):
+            return False
 
-    new_channel = {
-        "name": channel_name,
-        "type": channel_type
-    }
-
-    if channel_type != "separator":
-        new_channel["permissions"] = permissions or {
-            "view": ["owner"],
-            "send": ["owner"]
+        new_channel = {
+            "name": channel_name,
+            "type": channel_type
         }
 
-    if description:
-        new_channel["description"] = description
+        if channel_type != "separator":
+            new_channel["permissions"] = permissions or {
+                "view": ["owner"],
+                "send": ["owner"]
+            }
 
-    if wallpaper:
-        new_channel["wallpaper"] = wallpaper
+        if description:
+            new_channel["description"] = description
+        if wallpaper:
+            new_channel["wallpaper"] = wallpaper
+        if size and channel_type == "separator":
+            new_channel["size"] = size
 
-    if size and channel_type == "separator":
-        new_channel["size"] = size
+        channels.append(new_channel)
 
-    channels.append(new_channel)
+        if channel_type in ["text", "voice"]:
+            os.makedirs(channels_db_dir, exist_ok=True)
+            channel_file = os.path.join(channels_db_dir, channel_name + ".json")
+            tmp = channel_file + ".tmp"
+            with open(tmp, 'wb') as f:
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, channel_file)
 
-    # Save the updated channels index
-    with open(channels_index, 'w') as f:
-        json.dump(channels, f, indent=4)
-
-    # For text and voice channels, create an empty messages file
-    if channel_type in ["text", "voice"]:
-        os.makedirs(channels_db_dir, exist_ok=True)
-        with open(f"{channels_db_dir}/{channel_name}.json", 'w') as f:
-            f.write('')  # Empty file
+        _save_channels_index(channels)
 
     return True
+
 
 def can_user_pin(channel_name, user_roles):
     """
     Check if a user with specific roles can pin messages in a channel.
     If the channel does not specify pin, only owner is allowed by default
     """
-    try:
-        with open(channels_index, 'r') as f:
-            channels_data = json.load(f)
-        for channel in channels_data:
+    with _lock:
+        for channel in _get_channels_cache():
             if channel.get("name") == channel_name:
                 permissions = channel.get("permissions", {})
                 if "pin" not in permissions:
-                    return "owner" in user_roles  # Default: only owner can pin
+                    return "owner" in user_roles
                 allowed_roles = permissions.get("pin", [])
                 return any(role in allowed_roles for role in user_roles)
-    except FileNotFoundError:
-        return False
+    return False
+
 
 def pin_channel_message(channel_name, message_id):
     """
@@ -436,18 +686,29 @@ def pin_channel_message(channel_name, message_id):
     Returns:
         bool: True if the message was pinned successfully, False otherwise.
     """
-    channel_data = _read_channel_file(channel_name)
+    with _lock:
+        cache = _get_channel_cache(channel_name)
+        idx = cache["id_to_idx"].get(message_id)
+        if idx is None:
+            return False
 
-    for msg in channel_data:
-        if msg.get("id") == message_id:
-            msg["pinned"] = True
-            break
-    else:
-        return False # Message not found
+        old_msg = cache["messages"][idx]
+        msg = copy.deepcopy(old_msg)
+        msg["pinned"] = True
 
-    _write_channel_file(channel_name, channel_data)
+        new_serialised = json.dumps(msg, separators=(',', ':'), ensure_ascii=False)
+        if _patch_line_in_place(channel_name, idx, new_serialised):
+            cache["messages"][idx] = msg
+        else:
+            cache["messages"][idx] = msg
+            try:
+                _full_rewrite(channel_name)
+            except Exception:
+                cache["messages"][idx] = old_msg
+                raise
 
     return True
+
 
 def unpin_channel_message(channel_name, message_id):
     """
@@ -460,18 +721,29 @@ def unpin_channel_message(channel_name, message_id):
     Returns:
         bool: True if the message was unpinned successfully, False otherwise.
     """
-    channel_data = _read_channel_file(channel_name)
+    with _lock:
+        cache = _get_channel_cache(channel_name)
+        idx = cache["id_to_idx"].get(message_id)
+        if idx is None:
+            return False
 
-    for msg in channel_data:
-        if msg.get("id") == message_id:
-            msg["pinned"] = False
-            break
-    else:
-        return False # Message not found
+        old_msg = cache["messages"][idx]
+        msg = copy.deepcopy(old_msg)
+        msg["pinned"] = False
 
-    _write_channel_file(channel_name, channel_data)
+        new_serialised = json.dumps(msg, separators=(',', ':'), ensure_ascii=False)
+        if _patch_line_in_place(channel_name, idx, new_serialised):
+            cache["messages"][idx] = msg
+        else:
+            cache["messages"][idx] = msg
+            try:
+                _full_rewrite(channel_name)
+            except Exception:
+                cache["messages"][idx] = old_msg
+                raise
 
     return True
+
 
 def get_pinned_messages(channel_name):
     """
@@ -483,10 +755,11 @@ def get_pinned_messages(channel_name):
     Returns:
         list: A list of all pinned messages in a channel
     """
-    channel_data = _read_channel_file(channel_name)
-
-    pinned = [msg for msg in channel_data if msg.get("pinned")]
+    with _lock:
+        messages = _get_channel_cache(channel_name)["messages"]
+        pinned = [copy.deepcopy(msg) for msg in messages if msg.get("pinned")]
     return list(reversed(pinned))
+
 
 def search_channel_messages(channel_name, query):
     """
@@ -499,10 +772,11 @@ def search_channel_messages(channel_name, query):
     Returns:
         list: A list of messages that match the search query.
     """
-    channel_data = _read_channel_file(channel_name)
+    with _lock:
+        messages = _get_channel_cache(channel_name)["messages"]
+        results = [copy.deepcopy(msg) for msg in messages if query in msg.get("content", "").lower()]
+    return list(reversed(results))
 
-    search_results = [msg for msg in channel_data if query in msg.get("content", "").lower()]
-    return list(reversed(search_results))
 
 def delete_channel(channel_name):
     """
@@ -514,25 +788,24 @@ def delete_channel(channel_name):
     Returns:
         bool: True if the channel was deleted successfully, False if it does not exist.
     """
-    try:
-        with open(channels_index, 'r') as f:
-            channels = json.load(f)
-
-        new_channels = [channel for channel in channels if channel.get('name') != channel_name]
+    with _lock:
+        channels = copy.deepcopy(_get_channels_cache())
+        new_channels = [ch for ch in channels if ch.get('name') != channel_name]
 
         if len(new_channels) == len(channels):
-            return False # Channel not found
+            return False
 
-        # Save the updated channels index
-        with open(channels_index, 'w') as f:
-            json.dump(new_channels, f, indent=4)
+        _save_channels_index(new_channels)
+        _msg_cache.pop(channel_name, None)
 
-        # Remove the channel's message file
-        os.remove(f"{channels_db_dir}/{channel_name}.json")
+    channel_file = os.path.join(channels_db_dir, channel_name + ".json")
+    try:
+        os.remove(channel_file)
+    except OSError:
+        pass
 
-        return True
-    except FileNotFoundError:
-        return False # Channels index not found
+    return True
+
 
 def set_channel_permissions(channel_name, role, permission, allow=True):
     """
@@ -546,30 +819,25 @@ def set_channel_permissions(channel_name, role, permission, allow=True):
     Returns:
         bool: True if permissions were set successfully, False if the channel does not exist.
     """
-    try:
-        with open(channels_index, 'r') as f:
-            channels = json.load(f)
+    with _lock:
+        channels = copy.deepcopy(_get_channels_cache())
 
         for channel in channels:
             if channel.get('name') == channel_name:
                 if permission not in channel['permissions']:
                     channel['permissions'][permission] = []
-                if role not in channel['permissions'][permission]:
-                    if allow:
+                if allow:
+                    if role not in channel['permissions'][permission]:
                         channel['permissions'][permission].append(role)
-                    else: # If removing permission, ensure the role exists before removing
-                        if role in channel['permissions'][permission]:
-                            channel['permissions'][permission].remove(role)
+                else:
+                    if role in channel['permissions'][permission]:
+                        channel['permissions'][permission].remove(role)
 
-                # Save the updated channels index
-                with open(channels_index, 'w') as f:
-                    json.dump(channels, f, indent=4)
-
+                _save_channels_index(channels)
                 return True
 
-        return False # Channel not found
-    except FileNotFoundError:
-        return False # Channels index not found
+    return False
+
 
 def get_channel_permissions(channel_name):
     """
@@ -581,17 +849,12 @@ def get_channel_permissions(channel_name):
     Returns:
         dict: A dictionary of permissions for the channel, or None if the channel does not exist.
     """
-    try:
-        with open(channels_index, 'r') as f:
-            channels = json.load(f)
+    with _lock:
+        for channel in _get_channels_cache():
+            if channel.get("name") == channel_name:
+                return copy.deepcopy(channel.get("permissions", {}))
+    return None
 
-        for channel in channels:
-            if channel.get('name') == channel_name:
-                return channel.get('permissions', {})
-
-        return None # Channel not found
-    except FileNotFoundError:
-        return None # Channels index not found
 
 def reorder_channel(channel_name, new_position):
     """
@@ -604,26 +867,18 @@ def reorder_channel(channel_name, new_position):
     Returns:
         bool: True if the channel was reordered successfully, False if it does not exist.
     """
-    try:
-        with open(channels_index, 'r') as f:
-            channels = json.load(f)
+    with _lock:
+        channels = copy.deepcopy(_get_channels_cache())
 
         for i, channel in enumerate(channels):
             if channel.get('name') == channel_name:
-                # Remove the channel from its current position
                 channels.pop(i)
-                # Insert it at the new position
                 channels.insert(int(new_position), channel)
-
-                # Save the updated channels index
-                with open(channels_index, 'w') as f:
-                    json.dump(channels, f, indent=4)
-
+                _save_channels_index(channels)
                 return True
 
-        return False # Channel not found
-    except FileNotFoundError:
-        return False # Channels index not found
+    return False
+
 
 def get_message_replies(channel_name, message_id, limit=50):
     """
@@ -637,15 +892,14 @@ def get_message_replies(channel_name, message_id, limit=50):
     Returns:
         list: A list of messages that are replies to the specified message.
     """
-    channel_data = _read_channel_file(channel_name)
-
-    replies = []
-    for msg in channel_data:
-        if msg.get("reply_to", {}).get("id") == message_id:
-            replies.append(msg)
-            if len(replies) >= limit:
-                break
-
+    with _lock:
+        messages = _get_channel_cache(channel_name)["messages"]
+        replies = []
+        for msg in messages:
+            if msg.get("reply_to", {}).get("id") == message_id:
+                replies.append(copy.deepcopy(msg))
+                if len(replies) >= limit:
+                    break
     return replies
 
 def purge_messages(channel_name, count):
@@ -659,15 +913,25 @@ def purge_messages(channel_name, count):
     Returns:
         bool: True if messages were purged successfully, False if the channel does not exist or has fewer messages.
     """
-    channel_data = _read_channel_file(channel_name)
+    with _lock:
+        cache = _get_channel_cache(channel_name)
+        messages = cache["messages"]
 
-    if len(channel_data) < count:
-        return False # Not enough messages to purge
+        if len(messages) < count:
+            return False
 
-    # Remove the last 'count' messages
-    new_data = channel_data[:-count]
+        new_messages = messages[:-count]
+        old_messages = cache["messages"]
+        old_id_to_idx = cache["id_to_idx"]
 
-    _write_channel_file(channel_name, new_data)
+        cache["messages"] = new_messages
+        cache["id_to_idx"] = _build_id_index(new_messages)
+        try:
+            _full_rewrite(channel_name)
+        except Exception:
+            cache["messages"] = old_messages
+            cache["id_to_idx"] = old_id_to_idx
+            raise
 
     return True
 
@@ -676,37 +940,30 @@ def can_user_delete_own(channel_name, user_roles):
     Check if a user with specific roles can delete their own message in a channel.
     If the channel does not specify delete_own, all roles are allowed by default.
     """
-    try:
-        with open(channels_index, 'r') as f:
-            channels_data = json.load(f)
-        for channel in channels_data:
+    with _lock:
+        for channel in _get_channels_cache():
             if channel.get("name") == channel_name:
                 permissions = channel.get("permissions", {})
                 if "delete_own" not in permissions:
-                    return True # Default: all roles can delete their own messages
+                    return True
                 allowed_roles = permissions.get("delete_own", [])
                 return any(role in allowed_roles for role in user_roles)
-    except FileNotFoundError:
-        return True # Default to True if channel index not found
-    return True # Default to True if channel not found
+    return True
+
 
 def can_user_edit_own(channel_name, user_roles):
     """
     Check if a user with specific roles can edit their own message in a channel.
     If the channel does not specify edit_own, all roles are allowed by default.
     """
-    try:
-        with open(channels_index, 'r') as f:
-            channels_data = json.load(f)
-        for channel in channels_data:
+    with _lock:
+        for channel in _get_channels_cache():
             if channel.get("name") == channel_name:
                 permissions = channel.get("permissions", {})
                 if "edit_own" not in permissions:
-                    return True # Default: all roles can edit their own messages
+                    return True
                 allowed_roles = permissions.get("edit_own", [])
                 return any(role in allowed_roles for role in user_roles)
-    except FileNotFoundError:
-        return False
     return False
 
 def can_user_react(channel_name, user_roles):
@@ -714,69 +971,112 @@ def can_user_react(channel_name, user_roles):
     Check if a user with specific roles can react to messages in a channel.
     If the channel does not specify react, all roles are allowed by default.
     """
-    try:
-        with open(channels_index, 'r') as f:
-            channels_data = json.load(f)
-        for channel in channels_data:
+    with _lock:
+        for channel in _get_channels_cache():
             if channel.get("name") == channel_name:
                 permissions = channel.get("permissions", {})
                 if "react" not in permissions:
-                    return True # Default: all roles can react
+                    return True
                 allowed_roles = permissions.get("react", [])
                 return any(role in allowed_roles for role in user_roles)
-    except FileNotFoundError:
-        return False
     return False
+
 
 def add_reaction(channel_name, message_id, emoji_str, user_id):
-    channel_data = _read_channel_file(channel_name)
+    """
+    Add a reaction to a message in a specific channel.
 
-    for msg in channel_data:
-        if msg.get("id") == message_id:
-            if not emoji.is_emoji(emoji_str):
-                return False
+    Args:
+        channel_name (str): The name of the channel.
+        message_id (str): The ID of the message to add the reaction to.
+        emoji_str (str): The emoji to add.
+        user_id (str): The ID of the user to add the reaction for.
 
-            msg.setdefault("reactions", {})
-            msg["reactions"].setdefault(emoji_str, [])
+    Returns:
+        bool: True if the reaction was added successfully, False otherwise.
+    """
+    with _lock:
+        cache = _get_channel_cache(channel_name)
+        idx = cache["id_to_idx"].get(message_id)
+        if idx is None:
+            return False
 
-            if user_id in msg["reactions"][emoji_str]:
-                return True # already reacted
+        if not emoji.is_emoji(emoji_str):
+            return False
 
-            msg["reactions"][emoji_str].append(user_id)
+        old_msg = cache["messages"][idx]
+        msg = copy.deepcopy(old_msg)
+        msg.setdefault("reactions", {})
+        msg["reactions"].setdefault(emoji_str, [])
 
-            _write_channel_file(channel_name, channel_data)
-
+        if user_id in msg["reactions"][emoji_str]:
             return True
 
-    return False
+        msg["reactions"][emoji_str].append(user_id)
+
+        new_serialised = json.dumps(msg, separators=(',', ':'), ensure_ascii=False)
+        if _patch_line_in_place(channel_name, idx, new_serialised):
+            cache["messages"][idx] = msg
+        else:
+            cache["messages"][idx] = msg
+            try:
+                _full_rewrite(channel_name)
+            except Exception:
+                cache["messages"][idx] = old_msg
+                raise
+
+    return True
+
 
 def remove_reaction(channel_name, message_id, emoji_str, user_id):
-    channel_data = _read_channel_file(channel_name)
+    """
+    Remove a reaction from a message in a specific channel.
 
-    for msg in channel_data:
-        if msg.get("id") == message_id:
-            if not emoji.is_emoji(emoji_str):
-                return False
+    Args:
+        channel_name (str): The name of the channel.
+        message_id (str): The ID of the message to remove the reaction from.
+        emoji_str (str): The emoji to remove.
+        user_id (str): The ID of the user to remove the reaction for.
 
-            reactions = msg.get("reactions", {})
-            if emoji_str not in reactions:
-                return False
+    Returns:
+        bool: True if the reaction was removed successfully, False otherwise.
+    """
+    with _lock:
+        cache = _get_channel_cache(channel_name)
+        idx = cache["id_to_idx"].get(message_id)
+        if idx is None:
+            return False
 
-            if user_id not in reactions[emoji_str]:
-                return False
+        if not emoji.is_emoji(emoji_str):
+            return False
 
-            reactions[emoji_str].remove(user_id)
+        old_msg = cache["messages"][idx]
+        msg = copy.deepcopy(old_msg)
+        reactions = msg.get("reactions", {})
+        if emoji_str not in reactions:
+            return False
+        if user_id not in reactions[emoji_str]:
+            return False
 
-            if not reactions[emoji_str]:
-                del reactions[emoji_str]
-            if not reactions:
-                del msg["reactions"]
+        reactions[emoji_str].remove(user_id)
+        if not reactions[emoji_str]:
+            del reactions[emoji_str]
+        if not reactions:
+            msg.pop("reactions", None)
 
-            _write_channel_file(channel_name, channel_data)
+        new_serialised = json.dumps(msg, separators=(',', ':'), ensure_ascii=False)
+        if _patch_line_in_place(channel_name, idx, new_serialised):
+            cache["messages"][idx] = msg
+        else:
+            cache["messages"][idx] = msg
+            try:
+                _full_rewrite(channel_name)
+            except Exception:
+                cache["messages"][idx] = old_msg
+                raise
 
-            return True
+    return True
 
-    return False
 
 def get_reactions(channel_name, message_id):
     """
@@ -789,13 +1089,13 @@ def get_reactions(channel_name, message_id):
     Returns:
         dict: A dictionary containing the reactions for the message, or None if the message or channel does not exist.
     """
-    channel_data = _read_channel_file(channel_name)
+    with _lock:
+        cache = _get_channel_cache(channel_name)
+        idx = cache["id_to_idx"].get(message_id)
+        if idx is None:
+            return None
+        return copy.deepcopy(cache["messages"][idx].get("reactions", {}))
 
-    for msg in channel_data:
-        if msg.get("id") == message_id:
-            return msg.get("reactions", {})
-
-    return None
 
 def get_reaction_users(channel_name, message_id, emoji_str):
     """
@@ -809,14 +1109,17 @@ def get_reaction_users(channel_name, message_id, emoji_str):
     Returns:
         list: A list of usernames who reacted with the specified emoji, or None if the message or channel does not exist.
     """
-    channel_data = _read_channel_file(channel_name)
+    with _lock:
+        cache = _get_channel_cache(channel_name)
+        idx = cache["id_to_idx"].get(message_id)
+        if idx is None:
+            return None
+        msg = cache["messages"][idx]
+        reactions = msg.get("reactions", {})
+        if emoji_str in reactions:
+            return list(reactions[emoji_str])
+        return None
 
-    for msg in channel_data:
-        if msg.get("id") == message_id:
-            if emoji_str in msg.get("reactions", {}):
-                return msg["reactions"][emoji_str]
-
-    return None
 
 def channel_exists(channel_name):
     """
@@ -828,12 +1131,9 @@ def channel_exists(channel_name):
     Returns:
         bool: True if the channel exists, False otherwise.
     """
-    try:
-        with open(channels_index, 'r') as f:
-            channels = json.load(f)
-        return any(channel.get('name') == channel_name for channel in channels)
-    except FileNotFoundError:
-        return False
+    with _lock:
+        return any(ch.get('name') == channel_name for ch in _get_channels_cache())
+
 
 def update_channel(channel_name, updates):
     """
@@ -852,31 +1152,32 @@ def update_channel(channel_name, updates):
     Returns:
         bool: True if the channel was updated successfully, False if it does not exist.
     """
-    try:
-        with open(channels_index, 'r') as f:
-            channels = json.load(f)
-    except FileNotFoundError:
-        return False
+    with _lock:
+        channels = copy.deepcopy(_get_channels_cache())
 
-    for channel in channels:
-        if channel.get('name') == channel_name:
-            old_name = channel_name
+        for channel in channels:
+            if channel.get('name') == channel_name:
+                old_name = channel_name
 
-            for key, value in updates.items():
-                if key in ['name', 'type', 'description', 'permissions', 'wallpaper', 'size']:
-                    channel[key] = value
+                for key, value in updates.items():
+                    if key in ['name', 'type', 'description', 'permissions', 'wallpaper', 'size']:
+                        channel[key] = value
 
-            new_name = channel.get('name', old_name)
+                new_name = channel.get('name', old_name)
 
-            if new_name != old_name and channel.get('type') != 'separator':
-                old_file_path = f"{channels_db_dir}/{old_name}.json"
-                new_file_path = f"{channels_db_dir}/{new_name}.json"
-                if os.path.exists(old_file_path):
-                    os.rename(old_file_path, new_file_path)
+                if new_name != old_name and channel.get('type') != 'separator':
+                    old_file_path = os.path.join(channels_db_dir, old_name + ".json")
+                    new_file_path = os.path.join(channels_db_dir, new_name + ".json")
 
-            with open(channels_index, 'w') as f:
-                json.dump(channels, f, indent=4)
+                    _save_channels_index(channels)
 
-            return True
+                    if os.path.exists(old_file_path):
+                        os.replace(old_file_path, new_file_path)
+                    if old_name in _msg_cache:
+                        _msg_cache[new_name] = _msg_cache.pop(old_name)
+                else:
+                    _save_channels_index(channels)
+
+                return True
 
     return False

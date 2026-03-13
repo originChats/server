@@ -1,4 +1,7 @@
-import json, os
+import copy
+import json
+import os
+import threading
 
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -22,11 +25,46 @@ DEFAULT_ROLES = {
     }
 }
 
+_lock = threading.RLock()
+
+_roles_cache: dict = {}
+_roles_loaded: bool = False
+
+def _load_roles() -> dict:
+    global _roles_cache, _roles_loaded
+    try:
+        with open(roles_index, "r") as f:
+            _roles_cache = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        _roles_cache = copy.deepcopy(DEFAULT_ROLES)
+    _roles_loaded = True
+    return _roles_cache
+
+def _save_roles(roles_dict: dict) -> None:
+    global _roles_cache, _roles_loaded
+    tmp = roles_index + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(roles_dict, f, indent=4)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, roles_index)
+    _roles_cache = roles_dict
+    _roles_loaded = True
+
+def _get_roles_cache() -> dict:
+    if not _roles_loaded:
+        _load_roles()
+    return _roles_cache
+
 def _ensure_storage():
     os.makedirs(_MODULE_DIR, exist_ok=True)
     if not os.path.exists(roles_index):
-        with open(roles_index, "w") as f:
+        tmp = roles_index + ".tmp"
+        with open(tmp, "w") as f:
             json.dump(DEFAULT_ROLES, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, roles_index)
 
 _ensure_storage()
 
@@ -40,12 +78,9 @@ def get_role(role_name):
     Returns:
         dict: The role data if found, None otherwise.
     """
-    try:
-        with open(roles_index, "r") as f:
-            roles = json.load(f)
-        return roles.get(role_name, None)
-    except FileNotFoundError:
-        return None
+    with _lock:
+        role = _get_roles_cache().get(role_name)
+        return copy.deepcopy(role) if role is not None else None
 
 def get_all_roles():
     """
@@ -54,12 +89,8 @@ def get_all_roles():
     Returns:
         dict: A dictionary of all roles.
     """
-    try:
-        with open(roles_index, "r") as f:
-            roles = json.load(f)
-        return roles
-    except FileNotFoundError:
-        return {}
+    with _lock:
+        return copy.deepcopy(_get_roles_cache())
 
 def add_role(role_name, role_data):
     """
@@ -72,20 +103,13 @@ def add_role(role_name, role_data):
     Returns:
         bool: True if the role was added successfully, False if it already exists.
     """
-    try:
-        with open(roles_index, "r") as f:
-            roles = json.load(f)
-    except FileNotFoundError:
-        roles = {}
-
-    if role_name in roles:
-        return False  # Role already exists
-
-    roles[role_name] = role_data
-
-    with open(roles_index, "w") as f:
-        json.dump(roles, f, indent=4)
-
+    with _lock:
+        roles = _get_roles_cache()
+        if role_name in roles:
+            return False
+        new_roles = dict(roles)
+        new_roles[role_name] = copy.deepcopy(role_data)
+        _save_roles(new_roles)
     return True
 
 def update_role(role_name, role_data):
@@ -99,20 +123,13 @@ def update_role(role_name, role_data):
     Returns:
         bool: True if the role was updated successfully, False if it does not exist.
     """
-    try:
-        with open(roles_index, "r") as f:
-            roles = json.load(f)
-    except FileNotFoundError:
-        return False  # Roles database does not exist
-
-    if role_name not in roles:
-        return False  # Role does not exist
-
-    roles[role_name] = role_data
-
-    with open(roles_index, "w") as f:
-        json.dump(roles, f, indent=4)
-
+    with _lock:
+        roles = _get_roles_cache()
+        if role_name not in roles:
+            return False
+        new_roles = dict(roles)
+        new_roles[role_name] = copy.deepcopy(role_data)
+        _save_roles(new_roles)
     return True
 
 def update_role_key(role_name, key, value):
@@ -127,20 +144,14 @@ def update_role_key(role_name, key, value):
     Returns:
         bool: True if the role was updated successfully, False if it does not exist.
     """
-    try:
-        with open(roles_index, "r") as f:
-            roles = json.load(f)
-    except FileNotFoundError:
-        return False  # Roles database does not exist
-
-    if role_name not in roles:
-        return False  # Role does not exist
-
-    roles[role_name][key] = value
-
-    with open(roles_index, "w") as f:
-        json.dump(roles, f, indent=4)
-
+    with _lock:
+        roles = _get_roles_cache()
+        if role_name not in roles:
+            return False
+        new_roles = dict(roles)
+        new_roles[role_name] = dict(new_roles[role_name])
+        new_roles[role_name][key] = value
+        _save_roles(new_roles)
     return True
 
 def delete_role(role_name):
@@ -153,20 +164,13 @@ def delete_role(role_name):
     Returns:
         bool: True if the role was deleted successfully, False if it does not exist.
     """
-    try:
-        with open(roles_index, "r") as f:
-            roles = json.load(f)
-    except FileNotFoundError:
-        return False  # Roles database does not exist
-
-    if role_name not in roles:
-        return False  # Role does not exist
-
-    del roles[role_name]
-
-    with open(roles_index, "w") as f:
-        json.dump(roles, f, indent=4)
-
+    with _lock:
+        roles = _get_roles_cache()
+        if role_name not in roles:
+            return False
+        new_roles = dict(roles)
+        del new_roles[role_name]
+        _save_roles(new_roles)
     return True
 
 def role_exists(role_name):
@@ -179,12 +183,8 @@ def role_exists(role_name):
     Returns:
         bool: True if the role exists, False otherwise.
     """
-    try:
-        with open(roles_index, "r") as f:
-            roles = json.load(f)
-        return role_name in roles
-    except FileNotFoundError:
-        return False  # Roles database does not exist
+    with _lock:
+        return role_name in _get_roles_cache()
 
 def add_role_permission(role_name, permission, value=True):
     """
@@ -198,23 +198,16 @@ def add_role_permission(role_name, permission, value=True):
     Returns:
         bool: True if the permission was set successfully, False otherwise.
     """
-    try:
-        with open(roles_index, "r") as f:
-            roles = json.load(f)
-    except FileNotFoundError:
-        return False
-    
-    if role_name not in roles:
-        return False
-    
-    if "permissions" not in roles[role_name]:
-        roles[role_name]["permissions"] = {}
-    
-    roles[role_name]["permissions"][permission] = value
-    
-    with open(roles_index, "w") as f:
-        json.dump(roles, f, indent=4)
-    
+    with _lock:
+        roles = _get_roles_cache()
+        if role_name not in roles:
+            return False
+        new_roles = dict(roles)
+        new_roles[role_name] = dict(new_roles[role_name])
+        perms = dict(new_roles[role_name].get("permissions", {}))
+        perms[permission] = value
+        new_roles[role_name]["permissions"] = perms
+        _save_roles(new_roles)
     return True
 
 def get_role_permissions(role_name):
@@ -243,23 +236,17 @@ def remove_role_permission(role_name, permission):
     Returns:
         bool: True if the permission was removed, False otherwise.
     """
-    try:
-        with open(roles_index, "r") as f:
-            roles = json.load(f)
-    except FileNotFoundError:
-        return False
-    
-    if role_name not in roles:
-        return False
-    
-    if "permissions" in roles[role_name] and permission in roles[role_name]["permissions"]:
-        del roles[role_name]["permissions"][permission]
-        
-        with open(roles_index, "w") as f:
-            json.dump(roles, f, indent=4)
-        
-        return True
-    
+    with _lock:
+        roles = _get_roles_cache()
+        if role_name not in roles:
+            return False
+        if "permissions" in roles[role_name] and permission in roles[role_name]["permissions"]:
+            new_roles = dict(roles)
+            new_roles[role_name] = dict(new_roles[role_name])
+            new_roles[role_name]["permissions"] = dict(new_roles[role_name]["permissions"])
+            del new_roles[role_name]["permissions"][permission]
+            _save_roles(new_roles)
+            return True
     return False
 
 def can_role_mention_role(user_roles, target_role):
@@ -305,16 +292,17 @@ def get_hoisted_roles():
     Returns:
         list: A list of role data for hoisted roles.
     """
-    roles_dict = get_all_roles()
-    hoisted_roles = []
-    
-    for role_name, role_data in roles_dict.items():
-        if role_data.get("hoisted", False):
-            hoisted_roles.append({
-                "name": role_name,
-                **role_data
-            })
-    
+    with _lock:
+        roles_dict = _get_roles_cache()
+        hoisted_roles = []
+
+        for role_name, role_data in roles_dict.items():
+            if role_data.get("hoisted", False):
+                hoisted_roles.append({
+                    "name": role_name,
+                    **copy.deepcopy(role_data)
+                })
+
     return hoisted_roles
 
 def is_role_hoisted(role_name):
