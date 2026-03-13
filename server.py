@@ -348,6 +348,7 @@ class OriginChatsServer:
                         # Create server data object for authentication
                         auth_server_data = {
                             "connected_clients": self.connected_clients,
+                            "connected_usernames": self.connected_usernames,
                             "config": self.config,
                             "plugin_manager": self.plugin_manager,
                             "rate_limiter": self.rate_limiter
