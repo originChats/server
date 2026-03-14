@@ -70,7 +70,8 @@ def extract_user_mentions(content, exclude_username=None):
     Returns:
         set: Set of mentioned usernames (without @ prefix)
     """
-    mentioned = set(re.findall(r'(?<!&)@([a-zA-Z0-9_]+)', content))
+    mentioned = set(re.findall(r'@([a-zA-Z0-9_]+)', content))
+    mentioned = {u for u in mentioned if not content.split(f'@{u}')[0].endswith('&')}
     if exclude_username:
         mentioned.discard(exclude_username)
     return mentioned
