@@ -5,6 +5,7 @@ import threading
 import uuid
 from typing import Dict, List, Optional
 from . import users
+import emoji
 
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 threads_db_dir = os.path.join(_MODULE_DIR, "threads")
@@ -401,3 +402,83 @@ def is_thread_archived(thread_id: str) -> bool:
     if not metadata:
         return True
     return metadata.get("archived", False)
+
+
+def add_thread_reaction(thread_id, message_id, emoji_str, user_id):
+    """
+    Add a reaction to a message in a thread.
+
+    Args:
+        thread_id (str): The ID of the thread.
+        message_id (str): The ID of the message to add the reaction to.
+        emoji_str (str): The emoji to add.
+        user_id (str): The ID of the user to add the reaction for.
+
+    Returns:
+        bool: True if the reaction was added successfully, False otherwise.
+    """
+    with _lock:
+        cache = _get_thread_messages_cache(thread_id)
+        idx = cache["id_to_idx"].get(message_id)
+        if idx is None:
+            return False
+
+        if not emoji.is_emoji(emoji_str):
+            return False
+
+        old_msg = cache["messages"][idx]
+        msg = copy.deepcopy(old_msg)
+        msg.setdefault("reactions", {})
+        msg["reactions"].setdefault(emoji_str, [])
+
+        if user_id in msg["reactions"][emoji_str]:
+            return True
+
+        msg["reactions"][emoji_str].append(user_id)
+        cache["messages"][idx] = msg
+        _full_rewrite_messages(thread_id)
+
+    return True
+
+
+def remove_thread_reaction(thread_id, message_id, emoji_str, user_id):
+    """
+    Remove a reaction from a message in a thread.
+
+    Args:
+        thread_id (str): The ID of the thread.
+        message_id (str): The ID of the message to remove the reaction from.
+        emoji_str (str): The emoji to remove.
+        user_id (str): The ID of the user to remove the reaction for.
+
+    Returns:
+        bool: True if the reaction was removed successfully, False otherwise.
+    """
+    with _lock:
+        cache = _get_thread_messages_cache(thread_id)
+        idx = cache["id_to_idx"].get(message_id)
+        if idx is None:
+            return False
+
+        if not emoji.is_emoji(emoji_str):
+            return False
+
+        old_msg = cache["messages"][idx]
+        msg = copy.deepcopy(old_msg)
+
+        if "reactions" not in msg or emoji_str not in msg["reactions"]:
+            return True
+
+        if user_id in msg["reactions"][emoji_str]:
+            msg["reactions"][emoji_str].remove(user_id)
+
+        if not msg["reactions"][emoji_str]:
+            del msg["reactions"][emoji_str]
+
+        if not msg["reactions"]:
+            del msg["reactions"]
+
+        cache["messages"][idx] = msg
+        _full_rewrite_messages(thread_id)
+
+    return True

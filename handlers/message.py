@@ -59,6 +59,48 @@ def _require_text_channel_access(user_id, channel_name):
 
     return user_data, None
 
+
+def _get_thread_context(thread_id, user_id, user_roles, require_view=True):
+    """Helper to validate thread access and return context. Returns (context_dict, error_response)."""
+    thread_data = threads.get_thread(thread_id)
+    if not thread_data:
+        return None, ("Thread not found", "thread_id")
+    
+    if threads.is_thread_locked(thread_id):
+        return None, ("This thread is locked", "thread_id")
+    
+    if threads.is_thread_archived(thread_id):
+        return None, ("This thread is archived", "thread_id")
+    
+    parent_channel = thread_data.get("parent_channel")
+    
+    if require_view:
+        if not channels.does_user_have_permission(parent_channel, user_roles, "view"):
+            return None, ("You do not have permission to view this thread", "thread_id")
+    
+    return {"thread": thread_data, "parent_channel": parent_channel}, None
+
+
+def _get_channel_or_thread_context(channel_name, thread_id, user_id, user_roles, require_send=False):
+    """Helper to get channel/thread context. Returns (context_dict, error_response)."""
+    if thread_id:
+        ctx, err = _get_thread_context(thread_id, user_id, user_roles, require_view=True)
+        if err:
+            return None, err
+        if not ctx:
+            return None, ("Thread not found", "thread")
+        ctx["is_thread"] = True
+        return ctx, None
+    elif channel_name:
+        if not channels.channel_exists(channel_name):
+            return None, ("Channel not found", "channel")
+        if require_send:
+            if not channels.does_user_have_permission(channel_name, user_roles, "send"):
+                return None, ("You do not have permission to send messages in this channel", "channel")
+        return {"channel": channel_name, "is_thread": False}, None
+    else:
+        return None, ("Channel or thread_id required", "channel")
+
 def _validate_type(value, expected_type):
     match expected_type:
         case "str":
@@ -370,95 +412,153 @@ async def handle(ws, message, server_data=None):
 
                 return {"cmd": "typing", "user": username, "channel": channel_name, "global": True}
             case "message_edit":
-                # Handle message edit
                 user_id, error = _require_user_id(ws)
                 if error:
                     return error
-                # Check rate limiting if enabled
+                
                 if server_data and server_data.get("rate_limiter"):
                     is_allowed, reason, wait_time = server_data["rate_limiter"].is_allowed(user_id)
                     if not is_allowed:
-                        # Convert wait time to milliseconds and send rate_limit packet
                         wait_time_ms = int(wait_time * 1000)
                         return {"cmd": "rate_limit", "length": wait_time_ms}
+                
                 message_id = message.get("id")
                 channel_name = message.get("channel")
+                thread_id = message.get("thread_id")
                 new_content = message.get("content")
-                if not message_id or not channel_name or not new_content:
+                if not message_id or (not channel_name and not thread_id) or not new_content:
                     return _error("Invalid message edit format", match_cmd)
-                # Check if the message exists
-                msg_obj = channels.get_channel_message(channel_name, message_id)
-                if not msg_obj:
-                    return _error("Message not found or cannot be edited", match_cmd)
+                
                 user_roles, error = _require_user_roles(user_id)
                 if error:
                     return error
-                if msg_obj.get("user") == user_id:
-                    # Editing own message
-                    if not channels.can_user_edit_own(channel_name, user_roles):
-                        return _error("You do not have permission to edit your own message in this channel", match_cmd)
-                else:
-                    # Editing someone else's message (future: add edit permission if needed)
-                    return _error("You do not have permission to edit this message", match_cmd)
-                if not channels.edit_channel_message(channel_name, message_id, new_content):
-                    return _error("Failed to edit message", match_cmd)
-                if server_data:
-                    username = users.get_username_by_id(user_id)
-                    server_data["plugin_manager"].trigger_event("message_edit", ws, {
-                        "channel": channel_name,
-                        "id": message_id,
-                        "content": new_content,
-                        "user_id": user_id,
-                        "username": username
-                    }, server_data)
                 
-                # Get the edited message and convert to user format
-                edited_msg = channels.get_channel_message(channel_name, message_id)
-                if edited_msg:
-                    edited_msg = channels.convert_messages_to_user_format([edited_msg])[0]
-                return {"cmd": "message_edit", "id": message_id, "content": new_content, "message": edited_msg, "channel": channel_name, "global": True}
+                ctx, err = _get_channel_or_thread_context(channel_name, thread_id, user_id, user_roles)
+                if err:
+                    msg, key = err
+                    return _error(msg, match_cmd)
+                
+                if not ctx:
+                    return _error("Channel or thread not found", match_cmd)
+
+                is_thread = ctx["is_thread"]
+                parent_channel = ctx.get("parent_channel") or ctx.get("channel")
+                
+                if is_thread and thread_id:
+                    msg_obj = threads.get_thread_message(thread_id, message_id)
+                else:
+                    msg_obj = channels.get_channel_message(channel_name, message_id)
+                
+                if not msg_obj:
+                    return _error("Message not found or cannot be edited", match_cmd)
+                
+                if msg_obj.get("user") == user_id:
+                    if not channels.can_user_edit_own(parent_channel, user_roles):
+                        return _error(f"You do not have permission to edit your own message in this {'thread' if is_thread else 'channel'}", match_cmd)
+                else:
+                    return _error("You do not have permission to edit this message", match_cmd)
+                
+                if is_thread and thread_id:
+                    if not threads.edit_thread_message(thread_id, message_id, new_content):
+                        return _error("Failed to edit message", match_cmd)
+                    if server_data:
+                        username = users.get_username_by_id(user_id)
+                        server_data["plugin_manager"].trigger_event("message_edit", ws, {
+                            "channel": parent_channel,
+                            "thread_id": thread_id,
+                            "id": message_id,
+                            "content": new_content,
+                            "user_id": user_id,
+                            "username": username
+                        }, server_data)
+                    edited_msg = threads.get_thread_message(thread_id, message_id)
+                    if edited_msg:
+                        edited_msg = threads.convert_messages_to_user_format([edited_msg])[0]
+                    return {"cmd": "message_edit", "id": message_id, "content": new_content, "message": edited_msg, "channel": parent_channel, "thread_id": thread_id, "global": True}
+                else:
+                    if not channels.edit_channel_message(channel_name, message_id, new_content):
+                        return _error("Failed to edit message", match_cmd)
+                    if server_data:
+                        username = users.get_username_by_id(user_id)
+                        server_data["plugin_manager"].trigger_event("message_edit", ws, {
+                            "channel": channel_name,
+                            "id": message_id,
+                            "content": new_content,
+                            "user_id": user_id,
+                            "username": username
+                        }, server_data)
+                    edited_msg = channels.get_channel_message(channel_name, message_id)
+                    if edited_msg:
+                        edited_msg = channels.convert_messages_to_user_format([edited_msg])[0]
+                    return {"cmd": "message_edit", "id": message_id, "content": new_content, "message": edited_msg, "channel": channel_name, "global": True}
             case "message_delete":
-                # Handle message delete
                 user_id, error = _require_user_id(ws)
                 if error:
                     return error
                 
                 message_id = message.get("id")
                 channel_name = message.get("channel")
-                if not message_id or not channel_name:
+                thread_id = message.get("thread_id")
+                if not message_id or (not channel_name and not thread_id):
                     return _error("Invalid message delete format", match_cmd)
 
-                # Check if the message exists and can be deleted
-                message = channels.get_channel_message(channel_name, message_id)
-                if not message:
-                    return _error("Message not found or cannot be deleted", match_cmd)
-                
                 user_roles, error = _require_user_roles(user_id)
                 if error:
                     return error
-                
 
-                if message.get("user") == user_id:
-                    # User is deleting their own message
-                    if not channels.can_user_delete_own(channel_name, user_roles):
-                        return _error("You do not have permission to delete your own message in this channel", match_cmd)
+                ctx, err = _get_channel_or_thread_context(channel_name, thread_id, user_id, user_roles)
+                if err:
+                    msg, key = err
+                    return _error(msg, match_cmd)
+                
+                if not ctx:
+                    return _error("Channel or thread not found", match_cmd)
+                
+                is_thread = ctx["is_thread"]
+                parent_channel = ctx.get("parent_channel") or ctx.get("channel")
+                
+                if is_thread and thread_id:
+                    msg_obj = threads.get_thread_message(thread_id, message_id)
                 else:
-                    # User is deleting someone else's message
-                    if not channels.does_user_have_permission(channel_name, user_roles, "delete"):
+                    msg_obj = channels.get_channel_message(channel_name, message_id)
+                
+                if not msg_obj:
+                    return _error("Message not found or cannot be deleted", match_cmd)
+                
+                if msg_obj.get("user") == user_id:
+                    if not channels.can_user_delete_own(parent_channel, user_roles):
+                        return _error(f"You do not have permission to delete your own message in this {'thread' if is_thread else 'channel'}", match_cmd)
+                else:
+                    if not channels.does_user_have_permission(parent_channel, user_roles, "delete"):
                         return _error("You do not have permission to delete this message", match_cmd)
 
-                if not channels.delete_channel_message(channel_name, message_id):
-                    return _error("Failed to delete message", match_cmd)
-                
-                username = users.get_username_by_id(user_id)
-                if server_data:
-                    server_data["plugin_manager"].trigger_event("message_delete", ws, {
-                        "channel": channel_name,
-                        "id": message_id,
-                        "user_id": user_id,
-                        "username": username
-                    }, server_data)
-                return {"cmd": "message_delete", "id": message_id, "channel": channel_name, "global": True}
+                if is_thread and thread_id:
+                    if not threads.delete_thread_message(thread_id, message_id):
+                        return _error("Failed to delete message", match_cmd)
+                    
+                    username = users.get_username_by_id(user_id)
+                    if server_data:
+                        server_data["plugin_manager"].trigger_event("message_delete", ws, {
+                            "channel": parent_channel,
+                            "thread_id": thread_id,
+                            "id": message_id,
+                            "user_id": user_id,
+                            "username": username
+                        }, server_data)
+                    return {"cmd": "message_delete", "id": message_id, "channel": parent_channel, "thread_id": thread_id, "global": True}
+                else:
+                    if not channels.delete_channel_message(channel_name, message_id):
+                        return _error("Failed to delete message", match_cmd)
+                    
+                    username = users.get_username_by_id(user_id)
+                    if server_data:
+                        server_data["plugin_manager"].trigger_event("message_delete", ws, {
+                            "channel": channel_name,
+                            "id": message_id,
+                            "user_id": user_id,
+                            "username": username
+                        }, server_data)
+                    return {"cmd": "message_delete", "id": message_id, "channel": channel_name, "global": True}
             case "message_pin":
                 # Handle request to pin a message
                 user_id, error = _require_user_id(ws, "Authentication required")
@@ -567,7 +667,6 @@ async def handle(ws, message, server_data=None):
                 search_results = channels.convert_messages_to_user_format(search_results)
                 return {"cmd": "messages_search", "channel": channel_name, "query": query, "results": search_results}
             case "message_react_add":
-                # Handle request to add a reaction to a message
                 user_id, error = _require_user_id(ws, "Authentication required")
                 if error:
                     return error
@@ -577,96 +676,163 @@ async def handle(ws, message, server_data=None):
                     return error
 
                 channel_name = message.get("channel")
-                # Check if the user has permission to add reactions
-                if not channels.can_user_react(channel_name, user_roles):
-                    return _error("You do not have permission to add reactions to this message", match_cmd)
-
+                thread_id = message.get("thread_id")
                 message_id = message.get("id")
-                if not message_id:
-                    return _error("Message ID is required", match_cmd)
+                emoji_str = message.get("emoji")
 
-                emoji = message.get("emoji")
-                if not emoji:
-                    return _error("Emoji is required", match_cmd)
+                if not message_id or not emoji_str:
+                    return _error("Message ID and emoji are required", match_cmd)
 
-                # Store user ID, but send username to clients
-                username = users.get_username_by_id(user_id)
-                if not channels.add_reaction(channel_name, message_id, emoji, user_id):
-                    return _error("Failed to add reaction", match_cmd)
-                return {"cmd": "message_react_add", "id": message_id, "emoji": emoji, "channel": channel_name, "from": username, "global": True}
+                ctx, err = _get_channel_or_thread_context(channel_name, thread_id, user_id, user_roles)
+                if err:
+                    msg, key = err
+                    return _error(msg, match_cmd)
+                
+                if not ctx:
+                    return _error("Message not found", match_cmd)
+                
+                is_thread = ctx["is_thread"]
+                parent_channel = ctx.get("parent_channel") or ctx.get("channel")
+                
+                if not channels.can_user_react(parent_channel, user_roles):
+                    return _error(f"You do not have permission to add reactions to this message", match_cmd)
+                
+                if is_thread and thread_id:
+                    msg_obj = threads.get_thread_message(thread_id, message_id)
+                    if not msg_obj:
+                        return _error("Message not found", match_cmd)
+                    if not threads.add_thread_reaction(thread_id, message_id, emoji_str, user_id):
+                        return _error("Failed to add reaction", match_cmd)
+                    username = users.get_username_by_id(user_id)
+                    return {"cmd": "message_react_add", "id": message_id, "emoji": emoji_str, "channel": parent_channel, "thread_id": thread_id, "from": username, "global": True}
+                else:
+                    if not channels.add_reaction(channel_name, message_id, emoji_str, user_id):
+                        return _error("Failed to add reaction", match_cmd)
+                    username = users.get_username_by_id(user_id)
+                    return {"cmd": "message_react_add", "id": message_id, "emoji": emoji_str, "channel": channel_name, "from": username, "global": True}
             case "message_react_remove":
-                # Handle request to remove a reaction from a message
                 user_id, error = _require_user_id(ws, "Authentication required")
                 if error:
                     return error
 
                 channel_name = message.get("channel")
+                thread_id = message.get("thread_id")
+                message_id = message.get("id")
+                emoji_str = message.get("emoji")
+
+                if not message_id or not emoji_str:
+                    return _error("Message ID and emoji are required", match_cmd)
 
                 user_roles, error = _require_user_roles(user_id)
                 if error:
                     return error
 
-                # Check if the user has permission to remove reactions
-                if not channels.can_user_react(channel_name, user_roles):
+                ctx, err = _get_channel_or_thread_context(channel_name, thread_id, user_id, user_roles)
+                if err:
+                    msg, key = err
+                    return _error(msg, match_cmd)
+                
+                if not ctx:
+                    return _error("Message not found", match_cmd)
+
+                is_thread = ctx["is_thread"]
+                parent_channel = ctx.get("parent_channel") or ctx.get("channel")
+                
+                if not channels.can_user_react(parent_channel, user_roles):
                     return _error("You do not have permission to remove reactions from this message", match_cmd)
-
-                message_id = message.get("id")
-                if not message_id:
-                    return _error("Message ID is required", match_cmd)
-
-                emoji = message.get("emoji")
-                if not emoji:
-                    return _error("Emoji is required", match_cmd)
-
-                # Store user ID, but send username to clients
-                username = users.get_username_by_id(user_id)
-                if not channels.remove_reaction(channel_name, message_id, emoji, user_id):
-                    return _error("Failed to remove reaction", match_cmd)
-                return {"cmd": "message_react_remove", "id": message_id, "emoji": emoji, "channel": channel_name, "from": username, "global": True}
+                
+                if is_thread and thread_id:
+                    msg_obj = threads.get_thread_message(thread_id, message_id)
+                    if not msg_obj:
+                        return _error("Message not found", match_cmd)
+                    if not threads.remove_thread_reaction(thread_id, message_id, emoji_str, user_id):
+                        return _error("Failed to remove reaction", match_cmd)
+                    username = users.get_username_by_id(user_id)
+                    return {"cmd": "message_react_remove", "id": message_id, "emoji": emoji_str, "channel": parent_channel, "thread_id": thread_id, "from": username, "global": True}
+                else:
+                    if not channels.remove_reaction(channel_name, message_id, emoji_str, user_id):
+                        return _error("Failed to remove reaction", match_cmd)
+                    username = users.get_username_by_id(user_id)
+                    return {"cmd": "message_react_remove", "id": message_id, "emoji": emoji_str, "channel": channel_name, "from": username, "global": True}
             case "messages_get":
-                # Handle request for channel messages
                 channel_name = message.get("channel")
+                thread_id = message.get("thread_id")
                 start = message.get("start", 0)
                 limit = message.get("limit", 100)
                 end = start + limit
 
-                if not channel_name:
-                    return _error("Invalid channel name", match_cmd)
-
                 user_id, error = _require_user_id(ws)
                 if error:
                     return error
-                _, error = _require_text_channel_access(user_id, channel_name)
+                
+                user_roles, error = _require_user_roles(user_id)
                 if error:
                     return error
 
-                messages = channels.get_channel_messages(channel_name, start, limit)
-                # Convert user IDs to usernames before sending
-                messages = channels.convert_messages_to_user_format(messages)
-                return {"cmd": "messages_get", "channel": channel_name, "messages": messages, "range": {"start": start, "end": end}}
+                ctx, err = _get_channel_or_thread_context(channel_name, thread_id, user_id, user_roles)
+                if err:
+                    msg, key = err
+                    return _error(msg, match_cmd)
+
+                if not ctx:
+                    return _error("Channel or thread not found", match_cmd)
+                
+                is_thread = ctx["is_thread"]
+                parent_channel = ctx.get("parent_channel") or ctx.get("channel")
+                
+                if is_thread and thread_id:
+                    messages = threads.get_thread_messages(thread_id, start, limit)
+                    messages = threads.convert_messages_to_user_format(messages)
+                    return {"cmd": "messages_get", "channel": parent_channel, "thread_id": thread_id, "messages": messages, "range": {"start": start, "end": end}}
+                else:
+                    _, error = _require_text_channel_access(user_id, channel_name)
+                    if error:
+                        return error
+                    messages = channels.get_channel_messages(channel_name, start, limit)
+                    messages = channels.convert_messages_to_user_format(messages)
+                    return {"cmd": "messages_get", "channel": channel_name, "messages": messages, "range": {"start": start, "end": end}}
             case "message_get":
-                # Handle request for a specific message by ID
                 channel_name = message.get("channel")
+                thread_id = message.get("thread_id")
                 message_id = message.get("id")
 
-                if not channel_name or not message_id:
-                    return _error("Channel name and message ID are required", match_cmd)
+                if not message_id or (not channel_name and not thread_id):
+                    return _error("Channel/thread and message ID are required", match_cmd)
 
                 user_id, error = _require_user_id(ws)
                 if error:
                     return error
-                _, error = _require_text_channel_access(user_id, channel_name)
+
+                user_roles, error = _require_user_roles(user_id)
                 if error:
                     return error
 
-                # Get the specific message
-                msg = channels.get_channel_message(channel_name, message_id)
-                if not msg:
-                    return _error("Message not found", match_cmd)
+                ctx, err = _get_channel_or_thread_context(channel_name, thread_id, user_id, user_roles)
+                if err:
+                    msg, key = err
+                    return _error(msg, match_cmd)
 
-                # Convert user ID to username before sending
-                msg = channels.convert_messages_to_user_format([msg])[0]
-                return {"cmd": "message_get", "channel": channel_name, "message": msg}
+                if not ctx:
+                    return _error("Channel not found", match_cmd)
+                
+                is_thread = ctx["is_thread"]
+                parent_channel = ctx.get("parent_channel") or ctx.get("channel")
+                
+                if is_thread and thread_id:
+                    msg = threads.get_thread_message(thread_id, message_id)
+                    if not msg:
+                        return _error("Message not found", match_cmd)
+                    msg = threads.convert_messages_to_user_format([msg])[0]
+                    return {"cmd": "message_get", "channel": parent_channel, "thread_id": thread_id, "message": msg}
+                else:
+                    _, error = _require_text_channel_access(user_id, channel_name)
+                    if error:
+                        return error
+                    msg = channels.get_channel_message(channel_name, message_id)
+                    if not msg:
+                        return _error("Message not found", match_cmd)
+                    msg = channels.convert_messages_to_user_format([msg])[0]
+                    return {"cmd": "message_get", "channel": channel_name, "message": msg}
             case "message_replies":
                 # Handle request for replies to a specific message
                 channel_name = message.get("channel")
