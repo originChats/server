@@ -8,6 +8,7 @@ from . import users
 
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 threads_db_dir = os.path.join(_MODULE_DIR, "threads")
+thread_messages_dir = os.path.join(_MODULE_DIR, "threadMessages")
 
 _lock = threading.RLock()
 
@@ -16,7 +17,8 @@ _messages_cache: Dict[str, dict] = {}
 
 
 def _ensure_storage():
-    os.makedirs(threads_db_dir, exist_ok=True)
+	os.makedirs(threads_db_dir, exist_ok=True)
+	os.makedirs(thread_messages_dir, exist_ok=True)
 
 
 _ensure_storage()
@@ -27,7 +29,7 @@ def _get_thread_file_path(thread_id: str) -> str:
 
 
 def _get_messages_file_path(thread_id: str) -> str:
-    return os.path.join(threads_db_dir, f"{thread_id}_messages.jsonl")
+	return os.path.join(thread_messages_dir, f"{thread_id}.jsonl")
 
 
 def _load_thread_metadata(thread_id: str) -> Optional[dict]:

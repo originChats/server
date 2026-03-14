@@ -13,3 +13,6 @@ db/serverEmojis/*
 # VAPID keys — never commit the private key
 vapid/private_key.pem
 vapid/vapid_config.json
+
+db/threadMessages/*
+!db/threadMessages/.gitkeep

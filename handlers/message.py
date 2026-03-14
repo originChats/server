@@ -245,13 +245,13 @@ async def handle(ws, message, server_data=None):
                     if not channels.does_user_have_permission(parent_channel, user_roles, "send"):
                         return _error("You do not have permission to send messages in this thread", match_cmd)
                 else:
+                    if not channels.channel_exists(channel_name):
+                        return _error("Channel not found", match_cmd)
                     if not channels.does_user_have_permission(channel_name, user_roles, "send"):
                         return _error("You do not have permission to send messages in this channel", match_cmd)
-
-                # Check if channel type is valid for sending messages (text only, not forum/voice)
-                channel_info = channels.get_channel(channel_name)
-                if channel_info and channel_info.get("type") != "text":
-                    return _error("Cannot send messages in this channel type", match_cmd)
+                    channel_info = channels.get_channel(channel_name)
+                    if channel_info and channel_info.get("type") != "text":
+                        return _error("Cannot send messages in this channel type", match_cmd)
 
                 # Validate reply_to if provided
                 replied_message = None
