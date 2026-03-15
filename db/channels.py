@@ -487,6 +487,9 @@ def get_all_channels_for_roles(roles):
             for thread in channel_threads:
                 thread_copy = copy.deepcopy(thread)
                 thread_copy["created_by"] = users.get_username_by_id(thread_copy["created_by"])
+                thread_copy["participants"] = [
+                    users.get_username_by_id(p) for p in thread_copy.get("participants", [])
+                ]
                 thread_results.append(thread_copy)
             channel_copy["threads"] = thread_results
             result.append(channel_copy)
