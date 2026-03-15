@@ -2299,6 +2299,8 @@ async def handle(ws, message, server_data=None):
 
                 thread_data_copy = copy.deepcopy(thread_data)
                 thread_data_copy["created_by"] = username
+                participant_ids = thread_data_copy.get("participants", [])
+                thread_data_copy["participants"] = [users.get_username_by_id(pid) for pid in participant_ids]
 
                 return {"cmd": "thread_create", "thread": thread_data_copy, "channel": channel_name, "global": True}
             case "thread_get":
@@ -2322,6 +2324,8 @@ async def handle(ws, message, server_data=None):
                     return _error("You do not have permission to view this thread", match_cmd)
 
                 thread_data["created_by"] = users.get_username_by_id(thread_data.get("created_by"))
+                participant_ids = thread_data.get("participants", [])
+                thread_data["participants"] = [users.get_username_by_id(pid) for pid in participant_ids]
                 return {"cmd": "thread_get", "thread": thread_data}
             case "thread_messages":
                 user_id, error = _require_user_id(ws, "Authentication required")
@@ -2415,5 +2419,58 @@ async def handle(ws, message, server_data=None):
 
                 updated_thread = threads.get_thread(thread_id)
                 return {"cmd": "thread_update", "thread": updated_thread, "global": True}
+            case "thread_join":
+                user_id, error = _require_user_id(ws, "Authentication required")
+                if error:
+                    return error
+
+                thread_id = message.get("thread_id")
+                if not thread_id:
+                    return _error("Thread ID is required", match_cmd)
+
+                thread_data = threads.get_thread(thread_id)
+                if not thread_data:
+                    return _error("Thread not found", match_cmd)
+
+                user_roles = users.get_user_roles(user_id)
+                if not user_roles:
+                    return _error("User roles not found", match_cmd)
+
+                if not channels.does_user_have_permission(thread_data.get("parent_channel"), user_roles, "view"):
+                    return _error("You do not have permission to join this thread", match_cmd)
+
+                if threads.is_thread_locked(thread_id):
+                    return _error("This thread is locked", match_cmd)
+
+                if threads.is_thread_archived(thread_id):
+                    return _error("This thread is archived", match_cmd)
+
+                threads.join_thread(thread_id, user_id)
+                updated_thread = threads.get_thread(thread_id)
+                username = users.get_username_by_id(user_id)
+                participant_ids = updated_thread.get("participants", [])
+                updated_thread["participants"] = [users.get_username_by_id(pid) for pid in participant_ids]
+
+                return {"cmd": "thread_join", "thread": updated_thread, "thread_id": thread_id, "user": username, "global": True}
+            case "thread_leave":
+                user_id, error = _require_user_id(ws, "Authentication required")
+                if error:
+                    return error
+
+                thread_id = message.get("thread_id")
+                if not thread_id:
+                    return _error("Thread ID is required", match_cmd)
+
+                thread_data = threads.get_thread(thread_id)
+                if not thread_data:
+                    return _error("Thread not found", match_cmd)
+
+                threads.leave_thread(thread_id, user_id)
+                updated_thread = threads.get_thread(thread_id)
+                username = users.get_username_by_id(user_id)
+                participant_ids = updated_thread.get("participants", [])
+                updated_thread["participants"] = [users.get_username_by_id(pid) for pid in participant_ids]
+
+                return {"cmd": "thread_leave", "thread": updated_thread, "thread_id": thread_id, "user": username, "global": True}
             case _:
                 return _error(f"Unknown command: {message.get('cmd')}", match_cmd)

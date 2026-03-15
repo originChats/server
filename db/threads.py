@@ -142,7 +142,7 @@ def _full_rewrite_messages(thread_id: str):
 
 def create_thread(parent_channel: str, name: str, creator: str) -> dict:
     thread_id = str(uuid.uuid4())
-    
+
     metadata = {
         "id": thread_id,
         "name": name,
@@ -151,6 +151,7 @@ def create_thread(parent_channel: str, name: str, creator: str) -> dict:
         "created_at": _get_timestamp(),
         "locked": False,
         "archived": False,
+        "participants": [creator],
     }
 
     with _lock:
@@ -176,11 +177,17 @@ def get_thread(thread_id: str) -> Optional[dict]:
     with _lock:
         if thread_id in _threads_cache:
             return copy.deepcopy(_threads_cache[thread_id])
-        
+
         metadata = _load_thread_metadata(thread_id)
         if metadata:
+            created_by = metadata.get("created_by")
+            participants = metadata.get("participants", [])
+            if created_by and created_by not in participants:
+                participants.append(created_by)
+                metadata["participants"] = participants
+                _save_thread_metadata(thread_id, metadata)
             _threads_cache[thread_id] = metadata
-        return metadata
+            return metadata
 
 
 def get_channel_threads(channel_name: str) -> List[dict]:
@@ -228,7 +235,7 @@ def update_thread(thread_id: str, updates: dict) -> bool:
         if not metadata:
             return False
 
-        for key in ["name", "locked", "archived"]:
+        for key in ["name", "locked", "archived", "participants"]:
             if key in updates:
                 metadata[key] = updates[key]
 
@@ -402,6 +409,45 @@ def is_thread_archived(thread_id: str) -> bool:
     if not metadata:
         return True
     return metadata.get("archived", False)
+
+
+def join_thread(thread_id: str, user_id: str) -> bool:
+    with _lock:
+        metadata = get_thread(thread_id)
+        if not metadata:
+            return False
+
+        participants = metadata.get("participants", [])
+        if user_id not in participants:
+            participants.append(user_id)
+            metadata["participants"] = participants
+            _save_thread_metadata(thread_id, metadata)
+            _threads_cache[thread_id] = metadata
+
+        return True
+
+
+def leave_thread(thread_id: str, user_id: str) -> bool:
+    with _lock:
+        metadata = get_thread(thread_id)
+        if not metadata:
+            return False
+
+        participants = metadata.get("participants", [])
+        if user_id in participants:
+            participants.remove(user_id)
+            metadata["participants"] = participants
+            _save_thread_metadata(thread_id, metadata)
+            _threads_cache[thread_id] = metadata
+
+        return True
+
+
+def get_thread_participants(thread_id: str) -> List[str]:
+    metadata = get_thread(thread_id)
+    if not metadata:
+        return []
+    return metadata.get("participants", [])
 
 
 def add_thread_reaction(thread_id, message_id, emoji_str, user_id):
