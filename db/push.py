@@ -1,14 +1,38 @@
 import json
 import os
 import threading
+import hashlib
+import hmac
 from typing import Optional
 
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 _SUBS_FILE = os.path.join(_MODULE_DIR, "push_subscriptions.json")
+_FINGERPRINT_SECRET = os.environ.get("PUSH_FINGERPRINT_SECRET", "originchats-push-secret")
 
 _lock = threading.RLock()
 _cache: dict = {}
 _loaded: bool = False
+
+
+def compute_device_fingerprint(ip: str, user_agent: str, country: str = "") -> str:
+    """
+    Generate a unique device fingerprint using HMAC.
+    
+    Args:
+        ip: Client IP address (from CF-Connecting-IP or X-Forwarded-For)
+        user_agent: Browser user agent string
+        country: Country code from Cloudflare (CF-IPCountry header)
+    
+    Returns:
+        A 16-character device fingerprint
+    """
+    payload = f"{ip}|{user_agent}|{country}"
+    signature = hmac.new(
+        _FINGERPRINT_SECRET.encode(),
+        payload.encode(),
+        hashlib.sha256
+    ).hexdigest()[:16]
+    return signature
 
 
 def _load() -> dict:
@@ -54,24 +78,43 @@ def _ensure_storage():
 _ensure_storage()
 
 
-def upsert_subscription(username: str, endpoint: str, p256dh: str, auth: str):
+def upsert_subscription(username: str, endpoint: str, p256dh: str, auth: str, device_fingerprint: str | None = None):
     """
-    Insert or replace a push subscription for a given endpoint.
-    If the endpoint already exists for this user it is updated in-place;
-    otherwise a new entry is appended.
+    Insert or replace a push subscription for a given device.
+    
+    If device_fingerprint is provided, only one subscription per device is stored.
+    If the device already has a subscription, it is replaced.
     """
     username = username.lower()
     with _lock:
         data = dict(_get_cache())
         subs = list(data.get(username, []))
-
-        for i, sub in enumerate(subs):
-            if sub.get("endpoint") == endpoint:
-                subs[i] = {"endpoint": endpoint, "p256dh": p256dh, "auth": auth}
-                break
+        
+        if device_fingerprint:
+            for i, sub in enumerate(subs):
+                if sub.get("device_fingerprint") == device_fingerprint:
+                    subs[i] = {
+                        "endpoint": endpoint,
+                        "p256dh": p256dh,
+                        "auth": auth,
+                        "device_fingerprint": device_fingerprint
+                    }
+                    break
+            else:
+                subs.append({
+                    "endpoint": endpoint,
+                    "p256dh": p256dh,
+                    "auth": auth,
+                    "device_fingerprint": device_fingerprint
+                })
         else:
-            subs.append({"endpoint": endpoint, "p256dh": p256dh, "auth": auth})
-
+            for i, sub in enumerate(subs):
+                if sub.get("endpoint") == endpoint:
+                    subs[i] = {"endpoint": endpoint, "p256dh": p256dh, "auth": auth}
+                    break
+            else:
+                subs.append({"endpoint": endpoint, "p256dh": p256dh, "auth": auth})
+        
         data[username] = subs
         _save(data)
 
@@ -84,10 +127,10 @@ def delete_subscription(endpoint: str, username: Optional[str] = None):
     """
     if username is not None:
         username = username.lower()
-
+    
     with _lock:
         data = dict(_get_cache())
-
+        
         if username is not None:
             subs = data.get(username, [])
             new_subs = [s for s in subs if s.get("endpoint") != endpoint]
@@ -103,6 +146,18 @@ def delete_subscription(endpoint: str, username: Optional[str] = None):
                     changed = True
             if changed:
                 _save(data)
+
+
+def delete_subscription_by_fingerprint(username: str, device_fingerprint: str):
+    """Remove a subscription by device fingerprint for a specific user."""
+    username = username.lower()
+    with _lock:
+        data = dict(_get_cache())
+        subs = data.get(username, [])
+        new_subs = [s for s in subs if s.get("device_fingerprint") != device_fingerprint]
+        if len(new_subs) != len(subs):
+            data[username] = new_subs
+            _save(data)
 
 
 def get_subscriptions_for_user(username: str) -> list:

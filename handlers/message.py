@@ -3,6 +3,7 @@ import time, uuid, sys, os, asyncio, json, re
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logger import Logger
 from config_store import get_config_value
+import slash_handlers
 from pydantic import ValidationError
 from schemas.slash_command_schema import SlashCommand
 from schemas.server_emoji_schema import Emoji_add, Emoji_delete, Emoji_get_all, Emoji_update, Emoji_get_filename, Emoji_get_id
@@ -1222,6 +1223,7 @@ async def handle(ws, message, server_data=None):
                         username = user_data.get("username", client_user_id)
                         online_users.append({
                             "username": username,
+                            "nickname": user_data.get("nickname"),
                             "roles": user_data.get("roles"),
                             "color": color
                         })
@@ -1419,6 +1421,58 @@ async def handle(ws, message, server_data=None):
 
                 if not isinstance(cmd_name, str):
                     return _error("Command name must be a string", match_cmd)
+
+                # Check for server-side slash commands first
+                if slash_handlers.handler_exists(cmd_name):
+                    cmd_roles = slash_handlers.get_command_roles(cmd_name)
+                    whitelist = cmd_roles.get("whitelist")
+                    blacklist = cmd_roles.get("blacklist")
+
+                    if blacklist and user_roles:
+                        if any(role in blacklist for role in user_roles):
+                            return _error("Access denied: forbidden roles", match_cmd)
+
+                    if whitelist:
+                        if not user_roles or not any(role in whitelist for role in user_roles):
+                            return _error(f"Access denied: '{whitelist[0]}' role required", match_cmd)
+
+                handler = slash_handlers.get_handler(cmd_name)
+                is_async = slash_handlers.is_async_handler(cmd_name)
+                if handler:
+                    try:
+                        invoker_username = users.get_username_by_id(user_id)
+                        if is_async:
+                            result = await handler(ws, args, channel, server_data)
+                        else:
+                            result = handler(ws, args, channel, server_data)
+
+                        if "error" in result:
+                            return _error(result["error"], match_cmd)
+
+                        response_text = result.get("response", "")
+
+                        out_msg = {
+                            "user": "originChats",
+                            "content": response_text,
+                            "timestamp": time.time(),
+                            "type": "message",
+                            "pinned": False,
+                            "id": str(uuid.uuid4()),
+                            "interaction": {
+                                "command": cmd_name,
+                                "username": invoker_username
+                            }
+                        }
+
+                        channels.save_channel_message(channel, out_msg)
+                        out_msg_for_client = channels.convert_messages_to_user_format([out_msg])[0]
+                        out_msg_for_client["interaction"] = out_msg["interaction"]
+
+                        return {"cmd": "message_new", "message": out_msg_for_client, "channel": channel, "global": True}
+
+                    except Exception as e:
+                        Logger.error(f"Error executing server slash command /{cmd_name}: {str(e)}")
+                        return _error(f"Error executing command: {str(e)}", match_cmd)
 
                 slash_commands = server_data["slash_commands"]
                 command_data = None

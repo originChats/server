@@ -10,6 +10,7 @@ from db import serverEmojis
 import watchers
 from plugin_manager import PluginManager
 from logger import Logger
+import slash_handlers
 
 
 def _patch_websockets_request_parse():
@@ -95,12 +96,52 @@ class OriginChatsServer:
         self.plugin_manager = PluginManager()
         self._configure_server_assets()
         self.capabilities = self._detect_capabilities()
-        
+        self._register_server_slash_commands()
+
         Logger.info(f"OriginChats WebSocket Server v{self.version} initialized")
         if self.rate_limiter:
             Logger.info(f"Rate limiting enabled: {rate_config.get('messages_per_minute', 30)} msg/min, burst: {rate_config.get('burst_limit', 5)}")
         else:
             Logger.warning("Rate limiting disabled")
+
+    def _register_server_slash_commands(self):
+        """Register server-side slash commands as 'originChats' user"""
+        server_commands = slash_handlers.get_all_command_info()
+        if not server_commands:
+            Logger.warning("No server slash commands found")
+            return
+
+        registered_commands = []
+        for cmd_info in server_commands:
+            cmd_name = cmd_info.get("name")
+            if not cmd_name:
+                continue
+
+            self.slash_commands[f"server_{cmd_name}"] = {
+                "command": type('obj', (object,), {
+                    "name": cmd_name,
+                    "description": cmd_info.get("description", ""),
+                    "options": cmd_info.get("options", []),
+                    "whitelistRoles": cmd_info.get("whitelistRoles"),
+                    "blacklistRoles": cmd_info.get("blacklistRoles"),
+                    "ephemeral": cmd_info.get("ephemeral", False)
+                })(),
+                "user_id": "originChats",
+                "username": "originChats"
+            }
+
+            registered_commands.append({
+                "name": cmd_name,
+                "description": cmd_info.get("description", ""),
+                "options": cmd_info.get("options", []),
+                "whitelistRoles": cmd_info.get("whitelistRoles"),
+                "blacklistRoles": cmd_info.get("blacklistRoles"),
+                "ephemeral": cmd_info.get("ephemeral", False),
+                "registeredBy": "originChats"
+            })
+
+        self._server_slash_commands = registered_commands
+        Logger.success(f"Registered {len(registered_commands)} server slash commands")
 
     def _detect_capabilities(self):
         """Build the list of supported commands from the docs/commands directory."""
@@ -337,6 +378,13 @@ class OriginChatsServer:
                     "capabilities": self.capabilities
                 }
             })
+
+            # Send server slash commands to the client
+            if hasattr(self, '_server_slash_commands') and self._server_slash_commands:
+                await send_to_client(websocket, {
+                    "cmd": "slash_add",
+                    "commands": self._server_slash_commands
+                })
                 
             # Keep connection open and handle client messages
             async for message in websocket:

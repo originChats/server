@@ -166,22 +166,38 @@ async def handle_push_subscribe(ws, message: dict) -> dict:
     if not username:
         return {"cmd": "error", "src": "push_subscribe", "val": "Not authenticated"}
 
-    sub    = message.get("subscription")
+    sub = message.get("subscription")
     if not sub or not isinstance(sub, dict):
         return {"cmd": "error", "src": "push_subscribe", "val": "Missing subscription object"}
 
     endpoint = sub.get("endpoint")
-    keys     = sub.get("keys", {})
-    p256dh   = keys.get("p256dh")
-    auth     = keys.get("auth")
+    keys = sub.get("keys", {})
+    p256dh = keys.get("p256dh")
+    auth = keys.get("auth")
 
     if not endpoint or not p256dh or not auth:
         return {"cmd": "error", "src": "push_subscribe", "val": "subscription must include endpoint, keys.p256dh and keys.auth"}
 
+    # Extract fingerprint data from WebSocket headers
+    headers = getattr(ws, "request", None)
+    if headers:
+        headers = getattr(headers, "headers", {})
+
+    ip = ""
+    user_agent = ""
+    country = ""
+    
+    if headers:
+        ip = headers.get("CF-Connecting-IP", "") or headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        user_agent = headers.get("User-Agent", "")
+        country = headers.get("CF-IPCountry", "")
+
+    device_fingerprint = push_db.compute_device_fingerprint(ip, user_agent, country)
+
     try:
-        push_db.upsert_subscription(username, endpoint, p256dh, auth)
-        Logger.info(f"[Push] Subscription registered for {username}")
-        return {"cmd": "push_subscribed", "success": True}
+        push_db.upsert_subscription(username, endpoint, p256dh, auth, device_fingerprint=device_fingerprint)
+        Logger.info(f"[Push] Subscription registered for {username} (device: {device_fingerprint[:8]}...)")
+        return {"cmd": "push_subscribed", "success": True, "device_fingerprint": device_fingerprint}
     except Exception as exc:
         Logger.error(f"[Push] Failed to save subscription for {username}: {exc}")
         return {"cmd": "error", "src": "push_subscribe", "val": "Failed to save subscription"}

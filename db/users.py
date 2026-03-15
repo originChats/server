@@ -125,8 +125,10 @@ def get_users():
                     color = first_role_data.get("color")
 
             username = user_data.get("username", user_id)
+            nickname = user_data.get("nickname")
             user_arr.append({
                 "username": username,
+                "nickname": nickname,
                 "roles": list(user_roles),
                 "color": color,
             })
@@ -348,3 +350,59 @@ def get_usernames_by_role(role_name):
                 username = user_data.get("username", user_id)
                 usernames.append(username)
         return usernames
+
+
+def set_nickname(user_id, nickname):
+    """
+    Set a user's display nickname.
+
+    Args:
+        user_id (str): The ID of the user.
+        nickname (str): The nickname to set.
+
+    Returns:
+        bool: True if successful, False if user not found.
+    """
+    with _lock:
+        user = get_user(user_id)
+        if not user:
+            return False
+        user["nickname"] = nickname
+        save_user(user_id, user)
+        return True
+
+
+def get_nickname(user_id):
+    """
+    Get a user's nickname.
+
+    Args:
+        user_id (str): The ID of the user.
+
+    Returns:
+        str or None: The nickname if set, None otherwise.
+    """
+    user = get_user(user_id)
+    if user:
+        return user.get("nickname")
+    return None
+
+
+def clear_nickname(user_id):
+    """
+    Clear a user's nickname.
+
+    Args:
+        user_id (str): The ID of the user.
+
+    Returns:
+        bool: True if successful, False if user not found.
+    """
+    with _lock:
+        user = get_user(user_id)
+        if not user:
+            return False
+        if "nickname" in user:
+            del user["nickname"]
+            save_user(user_id, user)
+        return True
