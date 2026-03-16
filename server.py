@@ -6,7 +6,7 @@ from handlers.websocket_utils import send_to_client, heartbeat, broadcast_to_all
 from handlers.auth import handle_authentication
 from handlers import message as message_handler
 from handlers.rate_limiter import RateLimiter
-from db import serverEmojis
+from db import serverEmojis, push as push_db
 import watchers
 from plugin_manager import PluginManager
 from logger import Logger
@@ -97,6 +97,11 @@ class OriginChatsServer:
         self._configure_server_assets()
         self.capabilities = self._detect_capabilities()
         self._register_server_slash_commands()
+
+        # Cleanup stale push subscriptions on startup
+        removed = push_db.cleanup_stale_subscriptions()
+        if removed > 0:
+            Logger.info(f"Cleaned up {removed} stale push subscriptions (inactive > 6 months)")
 
         Logger.info(f"OriginChats WebSocket Server v{self.version} initialized")
         if self.rate_limiter:

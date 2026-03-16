@@ -1,5 +1,5 @@
 import requests
-from db import users, roles
+from db import users, roles, push as push_db
 from handlers.websocket_utils import send_to_client, broadcast_to_all
 import sys
 import os
@@ -11,7 +11,7 @@ async def handle_authentication(websocket, data, config_data, connected_clients,
     url = "https://api.rotur.dev/validate"
     key = validator_key or ("originChats-" + config_data.get("rotur", {}).get("validate_key", ""))
     validator = data.get("validator")
-    
+
     # Validate with rotur service
     response = requests.get(url, params={"key": key, "v": validator}, timeout=5)
     if response.status_code != 200 or response.json().get("valid") != True:
@@ -23,12 +23,12 @@ async def handle_authentication(websocket, data, config_data, connected_clients,
     api_response = response.json()
     user_id = api_response.get("id", "")
     username = api_response.get("username", "")
-    
+
     # Set authentication state with both ID and username
     websocket.authenticated = True
     websocket.user_id = user_id
     websocket.username = username
-    
+
     user = users.get_user(user_id)
     if user:
         websocket.user_roles = user.get("roles", [])
@@ -39,6 +39,18 @@ async def handle_authentication(websocket, data, config_data, connected_clients,
         Logger.warning(f"Banned user {username} (ID: {user_id}) attempted to connect from {client_ip}")
         websocket.authenticated = False
         return False
+
+    # Update push subscription last_used for this device
+    headers = getattr(websocket, "request", None)
+    if headers:
+        headers = getattr(headers, "headers", {})
+
+    if headers:
+        ip = headers.get("CF-Connecting-IP", "") or headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        user_agent = headers.get("User-Agent", "")
+        country = headers.get("CF-IPCountry", "")
+        device_fingerprint = push_db.compute_device_fingerprint(ip, user_agent, country)
+        push_db.update_last_used(username, device_fingerprint)
 
     # Create user if doesn't exist
     is_new_user = not users.user_exists(user_id)
