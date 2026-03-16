@@ -9,7 +9,7 @@ from logger import Logger
 async def handle_authentication(websocket, data, config_data, connected_clients, client_ip, server_data=None, validator_key=None):
     """Handle user authentication"""
     url = "https://api.rotur.dev/validate"
-    key = validator_key or ("originChats-" + config_data.get("rotur", {}).get("validate_key", ""))
+    key = validator_key
     validator = data.get("validator")
 
     # Validate with rotur service

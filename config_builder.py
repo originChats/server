@@ -28,10 +28,6 @@ DEFAULT_CONFIG = {
         "host": "127.0.0.1",
         "port": 5613,
     },
-    "rotur": {
-        "validate_url": "https://social.rotur.dev/validate",
-        "validate_key": "your_key_here",
-    },
     "service": {
         "name": "OriginChats",
         "version": "1.0.0",

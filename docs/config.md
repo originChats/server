@@ -45,13 +45,6 @@ This file contains the main configuration for the OriginChats server. Below is a
 - **port**: *(int)*
   - Port number for the websocket server.
 
-## rotur
-
-- **validate_url**: *(str)*
-  - URL used for validating users via Rotur service.
-- **validate_key**: *(str)*
-  - API key for Rotur validation.
-
 ## service
 
 - **name**: *(str)*
