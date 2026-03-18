@@ -6,7 +6,7 @@ from handlers.websocket_utils import send_to_client, heartbeat, broadcast_to_all
 from handlers.auth import handle_authentication
 from handlers import message as message_handler
 from handlers.rate_limiter import RateLimiter
-from db import serverEmojis, push as push_db, webhooks as webhooks_db, channels
+from db import serverEmojis, push as push_db, webhooks as webhooks_db, channels, users, roles
 import watchers
 from plugin_manager import PluginManager
 from logger import Logger
@@ -341,6 +341,29 @@ class OriginChatsServer:
             b""
         )
 
+    async def _handle_info_request(self):
+        info = {
+            "server": {
+                "name": self.config.get("server", {}).get("name", ""),
+                "icon": self.config.get("server", {}).get("icon", ""),
+                "owner": self.config.get("server", {}).get("owner", {})
+            },
+            "stats": {
+                "total_users": len(users._load_users()),
+                "connected_users": len(self.connected_clients),
+                "online_users": len(self.connected_usernames),
+                "total_channels": len(channels._load_channels_index()),
+                "total_roles": len(roles._load_roles())
+            }
+        }
+
+        return Response(
+            200,
+            "OK",
+            self._response_headers([("Content-Type", "application/json")]),
+            json.dumps(info, indent=2).encode("utf-8")
+        )
+
     def _response_headers(self, extra_headers=None):
         headers = list(extra_headers or [])
         headers.extend([
@@ -492,6 +515,9 @@ class OriginChatsServer:
                     b"" if request_method == "HEAD" else b"Server asset not found",
                 )
             return self._serve_file_response(file_path, request_method=request_method, cache_control="public, max-age=3600")
+
+        if path == "/info":
+            return await self._handle_info_request()
 
         return Response(
             404,
