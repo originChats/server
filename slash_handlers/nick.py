@@ -4,7 +4,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db import users
-from handlers.websocket_utils import broadcast_to_all
+from handlers.websocket_utils import broadcast_to_all, _get_ws_data, _get_ws_attr
 from logger import Logger
 
 
@@ -30,7 +30,7 @@ def get_command_info():
 
 
 async def handle(ws, args, channel, server_data):
-    user_id = getattr(ws, "user_id", None)
+    user_id = _get_ws_attr(ws, "user_id")
     if not user_id:
         return {"error": "Not authenticated"}
     

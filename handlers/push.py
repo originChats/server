@@ -161,8 +161,10 @@ async def handle_push_get_vapid(ws) -> dict:
     return {"cmd": "push_vapid", "key": _VAPID_PUBLIC_KEY_B64}
 
 
-async def handle_push_subscribe(ws, message: dict) -> dict:
-    username = getattr(ws, "username", None)
+async def handle_push_subscribe(ws, message: dict, server_data: dict) -> dict:
+    _ws_data = server_data.get("_ws_data", {}) if server_data else {}
+    ws_data = _ws_data.get(id(ws), {})
+    username = ws_data.get("username")
     if not username:
         return {"cmd": "error", "src": "push_subscribe", "val": "Not authenticated"}
 
@@ -179,20 +181,14 @@ async def handle_push_subscribe(ws, message: dict) -> dict:
         return {"cmd": "error", "src": "push_subscribe", "val": "subscription must include endpoint, keys.p256dh and keys.auth"}
 
     # Extract fingerprint data from WebSocket headers
-    headers = getattr(ws, "request", None)
-    if headers:
-        headers = getattr(headers, "headers", {})
-
-    ip = ""
-    user_agent = ""
-    country = ""
-    
-    if headers:
+    request = ws_data.get("request")
+    device_fingerprint = ""
+    if request:
+        headers = request.headers
         ip = headers.get("CF-Connecting-IP", "") or headers.get("X-Forwarded-For", "").split(",")[0].strip()
         user_agent = headers.get("User-Agent", "")
         country = headers.get("CF-IPCountry", "")
-
-    device_fingerprint = push_db.compute_device_fingerprint(ip, user_agent, country)
+        device_fingerprint = push_db.compute_device_fingerprint(ip, user_agent, country)
 
     try:
         push_db.upsert_subscription(username, endpoint, p256dh, auth, device_fingerprint=device_fingerprint)
@@ -203,8 +199,10 @@ async def handle_push_subscribe(ws, message: dict) -> dict:
         return {"cmd": "error", "src": "push_subscribe", "val": "Failed to save subscription"}
 
 
-async def handle_push_unsubscribe(ws, message: dict) -> dict:
-    username = getattr(ws, "username", None)
+async def handle_push_unsubscribe(ws, message: dict, server_data: dict) -> dict:
+    _ws_data = server_data.get("_ws_data", {}) if server_data else {}
+    ws_data = _ws_data.get(id(ws), {})
+    username = ws_data.get("username")
     if not username:
         return {"cmd": "error", "src": "push_unsubscribe", "val": "Not authenticated"}
 

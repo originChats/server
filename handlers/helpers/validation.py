@@ -1,5 +1,6 @@
 from db import channels, users
 from config_store import get_config_value
+from handlers.websocket_utils import _get_ws_attr
 from typing import TypeVar
 
 T = TypeVar("T")
@@ -16,8 +17,8 @@ def config_value(server_data, *path: str, default: T) -> T:
     return get_config_value(*path, default=default, config=config)
 
 
-def require_user_id(ws, error_message="User not authenticated"):
-    user_id = getattr(ws, "user_id", None)
+def require_user_id(ws, error_message: str = "User not authenticated"):
+    user_id = _get_ws_attr(ws, "user_id")
     if not user_id:
         return None, error(error_message)
     return user_id, None
@@ -101,20 +102,22 @@ def require_voice_channel_access(user_id, channel_name, match_cmd):
 
 
 def require_voice_channel_membership(ws, server_data, match_cmd):
-    user_id = getattr(ws, "user_id", None)
+    _ws_data = server_data.get("_ws_data", {}) if server_data else {}
+    ws_data = _ws_data.get(id(ws), {})
+    user_id = ws_data.get("user_id")
     if not user_id:
         return None, None, error("Authentication required", match_cmd)
     if not server_data:
         return None, None, error("Server data not available", match_cmd)
     voice_channels = server_data.get("voice_channels", {})
-    current_channel = getattr(ws, "voice_channel", None)
+    current_channel = ws_data.get("voice_channel")
     if not current_channel:
         return None, None, error("You are not in a voice channel", match_cmd)
     if current_channel not in voice_channels:
-        ws.voice_channel = None
+        ws_data["voice_channel"] = None
         return None, None, error("Voice channel no longer exists", match_cmd)
     if user_id not in voice_channels[current_channel]:
-        ws.voice_channel = None
+        ws_data["voice_channel"] = None
         return None, None, error("You are not in this voice channel", match_cmd)
     return user_id, current_channel, None
 

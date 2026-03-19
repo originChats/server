@@ -1,8 +1,8 @@
-import asyncio, websockets, json, os, mimetypes, secrets
-from urllib.parse import urlsplit, unquote, parse_qs
-from websockets.datastructures import Headers
-from websockets.http11 import Request, Response, d, parse_headers, parse_line
-from handlers.websocket_utils import send_to_client, heartbeat, broadcast_to_all, broadcast_to_all_except, broadcast_to_channel_except, broadcast_to_voice_channel_with_viewers
+import asyncio, json, os, mimetypes, secrets
+from urllib.parse import urlsplit, unquote
+from aiohttp import web
+import aiohttp
+from handlers.websocket_utils import send_to_client, heartbeat, broadcast_to_all, broadcast_to_all_except, broadcast_to_channel_except, broadcast_to_voice_channel_with_viewers, set_ws_data
 from handlers.auth import handle_authentication
 from handlers import message as message_handler
 from handlers.rate_limiter import RateLimiter
@@ -13,47 +13,6 @@ from logger import Logger
 import slash_handlers
 
 
-def _patch_websockets_request_parse():
-    if getattr(Request, "_originchats_http_methods_patched", False):
-        return
-
-    @classmethod
-    def _originchats_parse_request(cls, read_line):
-        try:
-            request_line = yield from parse_line(read_line)
-        except EOFError as exc:
-            raise EOFError("connection closed while reading HTTP request line") from exc
-
-        request_line = bytes(request_line)
-
-        try:
-            method, raw_path, protocol = request_line.split(b" ", 2)
-        except ValueError:
-            raise ValueError(f"invalid HTTP request line: {d(request_line)}") from None
-
-        if protocol != b"HTTP/1.1":
-            raise ValueError(
-                f"unsupported protocol; expected HTTP/1.1: {d(request_line)}"
-            )
-        if method not in {b"GET", b"HEAD", b"OPTIONS", b"POST"}:
-            raise ValueError(f"unsupported HTTP method; expected GET/POST; got {d(method)}")
-
-        path = raw_path.decode("ascii", "surrogateescape")
-        headers = yield from parse_headers(read_line)
-
-        if "Transfer-Encoding" in headers:
-            raise NotImplementedError("transfer codings aren't supported")
-
-        request = cls(path, headers)
-        setattr(request, "method", method.decode("ascii", "surrogateescape"))
-        return request
-
-    setattr(Request, "parse", _originchats_parse_request)
-    setattr(Request, "_originchats_http_methods_patched", True)
-
-
-_patch_websockets_request_parse()
-
 class OriginChatsServer:
     """OriginChats WebSocket server"""
     
@@ -61,10 +20,11 @@ class OriginChatsServer:
         # Load configuration
         with open(os.path.join(os.path.dirname(__file__), config_path), "r") as f:
             self.config = json.load(f)
-        
-        # Server state
+
         self.connected_clients = set()
         self.connected_usernames = {}
+        self._ws_data = {} # Store custom websocket data by ws id
+        set_ws_data(self._ws_data)
         self.version = self.config["service"]["version"]
         self.heartbeat_interval = 30
         self.main_event_loop = None
@@ -75,8 +35,7 @@ class OriginChatsServer:
         self.server_assets_dir = os.path.join(os.path.dirname(__file__), "db", "serverAssets")
         os.makedirs(self.server_assets_dir, exist_ok=True)
         self.server_asset_files = {}
-        
-        # Initialize rate limiter if enabled
+
         rate_config = self.config.get("rate_limiting", {})
         if rate_config.get("enabled", False):
             self.rate_limiter = RateLimiter(
@@ -177,23 +136,6 @@ class OriginChatsServer:
     def _join_public_url(self, path):
         return f"{self._normalize_public_base_url().rstrip('/')}/{path.lstrip('/')}"
 
-    def _resolve_server_asset_path(self, file_path):
-        if not file_path or not isinstance(file_path, str):
-            return None
-
-        normalized_path = os.path.normpath(file_path)
-        if not os.path.isabs(normalized_path):
-            normalized_path = os.path.normpath(os.path.join(os.path.dirname(__file__), normalized_path))
-
-        if not os.path.isfile(normalized_path):
-            return None
-
-        content_type, _ = mimetypes.guess_type(normalized_path)
-        if not content_type or not content_type.startswith("image/"):
-            return None
-
-        return normalized_path
-
     def _register_server_asset(self, asset_name):
         if "server" not in self.config:
             return
@@ -244,39 +186,128 @@ class OriginChatsServer:
 
         return file_path
 
-    async def _read_request_body(self, connection, content_length):
-        body = b""
-        remaining = content_length
-        while remaining > 0:
-            try:
-                chunk = await connection.recv(min(remaining, 8192))
-                if isinstance(chunk, str):
-                    chunk = chunk.encode("utf-8")
-                body += chunk
-                remaining -= len(chunk)
-            except Exception:
-                break
-        return body
+    def _cors_headers(self):
+        return {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS, POST",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, Range",
+            "Access-Control-Expose-Headers": "Content-Length, Content-Type, Cache-Control",
+        }
 
-    async def _handle_webhook_request(self, token, body):
+    def _apply_cors(self, response):
+        for k, v in self._cors_headers().items():
+            response.headers[k] = v
+        return response
+
+    async def _route_options(self, request):
+        return self._apply_cors(web.Response(status=204))
+
+    async def _route_index(self, request):
+        index_path = os.path.join(os.path.dirname(__file__), "index.html")
+        if not os.path.isfile(index_path):
+            return self._apply_cors(web.Response(status=404, text="index.html not found"))
+        return self._apply_cors(web.FileResponse(index_path, headers={
+            "Cache-Control": "no-cache",
+            **self._cors_headers()
+        }))
+
+    async def _route_404(self, request):
+        return self._apply_cors(web.Response(
+            status=404,
+            content_type="application/json",
+            text=json.dumps({"error": "Not found"})
+        ))
+
+    async def _route_info(self, request):
+        info = {
+            "server": {
+                "name": self.config.get("server", {}).get("name", ""),
+                "icon": self.config.get("server", {}).get("icon", ""),
+                "owner": self.config.get("server", {}).get("owner", {})
+            },
+            "stats": {
+                "total_users": len(users._load_users()),
+                "connected_users": len(self.connected_clients),
+                "online_users": len(self.connected_usernames),
+                "total_channels": len(channels._load_channels_index()),
+                "total_roles": len(roles._load_roles())
+            }
+        }
+        return self._apply_cors(web.Response(
+            status=200,
+            content_type="application/json",
+            text=json.dumps(info, indent=2)
+        ))
+
+    async def _route_emoji(self, request):
+        file_name = unquote(request.match_info.get("filename", "")).strip()
+        file_path = self._resolve_emoji_file_path(file_name)
+        if not file_path:
+            return self._apply_cors(web.Response(status=404, text="Emoji not found"))
+        return self._apply_cors(web.FileResponse(file_path, headers={
+            "Cache-Control": "public, max-age=3600",
+            **self._cors_headers()
+        }))
+
+    async def _route_server_asset(self, request):
+        asset_name = request.match_info.get("name", "").strip("/")
+        file_path = self.server_asset_files.get(asset_name)
+        if not file_path or not os.path.isfile(file_path):
+            return self._apply_cors(web.Response(status=404, text="Server asset not found"))
+        return self._apply_cors(web.FileResponse(file_path, headers={
+            "Cache-Control": "public, max-age=3600",
+            **self._cors_headers()
+        }))
+
+    async def _route_webhook(self, request):
+        token = request.rel_url.query.get("token")
+        if not token:
+            return self._apply_cors(web.Response(
+                status=401,
+                content_type="application/json",
+                text=json.dumps({"error": "Webhook token required"})
+            ))
+
+        content_type = request.headers.get("Content-Type", "")
+        if not content_type.startswith("application/json"):
+            return self._apply_cors(web.Response(
+                status=415,
+                content_type="application/json",
+                text=json.dumps({"error": "Content-Type must be application/json"})
+            ))
+
+        try:
+            body = await request.read()
+        except Exception:
+            return self._apply_cors(web.Response(
+                status=400,
+                content_type="application/json",
+                text=json.dumps({"error": "Failed to read request body"})
+            ))
+
+        if len(body) > 10 * 1024 * 1024:
+            return self._apply_cors(web.Response(
+                status=413,
+                content_type="application/json",
+                text=json.dumps({"error": "Request body too large (max 10MB)"})
+            ))
+
         webhook = webhooks_db.get_webhook_by_token(token)
         if not webhook:
-            return Response(
-                401,
-                "Unauthorized",
-                self._response_headers([("Content-Type", "application/json")]),
-                json.dumps({"error": "Invalid webhook token"}).encode("utf-8")
-            )
+            return self._apply_cors(web.Response(
+                status=401,
+                content_type="application/json",
+                text=json.dumps({"error": "Invalid webhook token"})
+            ))
 
         try:
             data = json.loads(body.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError):
-            return Response(
-                400,
-                "Bad Request",
-                self._response_headers([("Content-Type", "application/json")]),
-                json.dumps({"error": "Invalid JSON body"}).encode("utf-8")
-            )
+            return self._apply_cors(web.Response(
+                status=400,
+                content_type="application/json",
+                text=json.dumps({"error": "Invalid JSON body"})
+            ))
 
         content = data.get("content") or data.get("text") or ""
         username = data.get("username") or webhook.get("name") or "Webhook"
@@ -287,24 +318,21 @@ class OriginChatsServer:
             content = data.get("message", "")
 
         if not content and not embeds:
-            return Response(
-                400,
-                "Bad Request",
-                self._response_headers([("Content-Type", "application/json")]),
-                json.dumps({"error": "No content provided"}).encode("utf-8")
-            )
+            return self._apply_cors(web.Response(
+                status=400,
+                content_type="application/json",
+                text=json.dumps({"error": "No content provided"})
+            ))
 
         channel_name = webhook.get("channel")
         if not channels.channel_exists(channel_name):
-            return Response(
-                404,
-                "Not Found",
-                self._response_headers([("Content-Type", "application/json")]),
-                json.dumps({"error": "Channel not found"}).encode("utf-8")
-            )
+            return self._apply_cors(web.Response(
+                status=404,
+                content_type="application/json",
+                text=json.dumps({"error": "Channel not found"})
+            ))
 
-        import uuid
-        import time
+        import uuid, time
         message_id = str(uuid.uuid4())
         out_msg = {
             "user": "originChats",
@@ -334,219 +362,31 @@ class OriginChatsServer:
             "global": True
         }, channel_name, None)
 
-        return Response(
-            204,
-            "No Content",
-            self._response_headers(),
-            b""
+        return self._apply_cors(web.Response(status=204))
+
+    async def _route_websocket(self, request):
+        ws = web.WebSocketResponse(heartbeat=None)
+        await ws.prepare(request)
+
+        client_ip = (
+            request.headers.get("CF-Connecting-IP")
+            or request.headers.get("X-Forwarded-For")
+            or request.remote
         )
-
-    async def _handle_info_request(self):
-        info = {
-            "server": {
-                "name": self.config.get("server", {}).get("name", ""),
-                "icon": self.config.get("server", {}).get("icon", ""),
-                "owner": self.config.get("server", {}).get("owner", {})
-            },
-            "stats": {
-                "total_users": len(users._load_users()),
-                "connected_users": len(self.connected_clients),
-                "online_users": len(self.connected_usernames),
-                "total_channels": len(channels._load_channels_index()),
-                "total_roles": len(roles._load_roles())
-            }
-        }
-
-        return Response(
-            200,
-            "OK",
-            self._response_headers([("Content-Type", "application/json")]),
-            json.dumps(info, indent=2).encode("utf-8")
-        )
-
-    def _response_headers(self, extra_headers=None):
-        headers = list(extra_headers or [])
-        headers.extend([
-            ("Access-Control-Allow-Origin", "*"),
-            ("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS"),
-            ("Access-Control-Allow-Headers", "Content-Type, Authorization, Range"),
-            ("Access-Control-Expose-Headers", "Content-Length, Content-Type, Cache-Control"),
-        ])
-        return Headers(headers)
-
-    def _empty_response(self, status, reason, extra_headers=None):
-        headers = list(extra_headers or [])
-        headers.append(("Content-Length", "0"))
-        return Response(status, reason, self._response_headers(headers), b"")
-
-    def _serve_file_response(self, file_path, request_method="GET", cache_control="public, max-age=3600"):
-        body = b""
-        if request_method != "HEAD":
-            with open(file_path, "rb") as f:
-                body = f.read()
-
-        content_type, _ = mimetypes.guess_type(file_path)
-        if not content_type:
-            content_type = "application/octet-stream"
-
-        return Response(
-            200,
-            "OK",
-            self._response_headers(
-                [
-                    ("Content-Type", content_type),
-                    ("Content-Length", str(os.path.getsize(file_path))),
-                    ("Cache-Control", cache_control),
-                ]
-            ),
-            body,
-        )
-
-    def _resolve_server_asset_request(self, asset_name):
-        return self.server_asset_files.get(asset_name)
-
-    async def _process_http_request(self, connection, request):
-        """
-        Serve HTTP asset files on the same socket as WebSocket traffic.
-        """
-        request_method = getattr(request, "method", "GET").upper()
-        if request_method == "OPTIONS":
-            return self._empty_response(204, "No Content")
-        
-        path = urlsplit(request.path).path
-        query_params = {}
-        if "?" in request.path:
-            query_string = request.path.split("?", 1)[1]
-            query_params = {k: v[0] if len(v) == 1 else v for k, v in parse_qs(query_string).items()}
-
-        if request_method == "POST":
-            content_length = int(request.headers.get("Content-Length", 0))
-            if content_length == 0:
-                return Response(
-                    400,
-                    "Bad Request",
-                    self._response_headers([("Content-Type", "application/json")]),
-                    json.dumps({"error": "Content-Length required"}).encode("utf-8")
-                )
-
-            content_type = request.headers.get("Content-Type", "application/json")
-            if not content_type.startswith("application/json"):
-                return Response(
-                    415,
-                    "Unsupported Media Type",
-                    self._response_headers([("Content-Type", "application/json")]),
-                    json.dumps({"error": "Content-Type must be application/json"}).encode("utf-8")
-                )
-
-            if content_length > 10 * 1024 * 1024:
-                return Response(
-                    413,
-                    "Payload Too Large",
-                    self._response_headers([("Content-Type", "application/json")]),
-                    json.dumps({"error": "Request body too large (max 10MB)"}).encode("utf-8")
-                )
-
-            body = await self._read_request_body(connection, content_length)
-
-            if path == "/webhooks" or path.startswith("/webhooks/"):
-                token = query_params.get("token")
-                if not token:
-                    return Response(
-                        401,
-                        "Unauthorized",
-                        self._response_headers([("Content-Type", "application/json")]),
-                        json.dumps({"error": "Webhook token required"}).encode("utf-8")
-                    )
-                
-                return await self._handle_webhook_request(token, body)
-
-            return Response(
-                404,
-                "Not Found",
-                self._response_headers([("Content-Type", "application/json")]),
-                json.dumps({"error": "Endpoint not found"}).encode("utf-8")
-            )
-
-        if request_method not in {"GET", "HEAD"}:
-            return self._empty_response(
-                405,
-                "Method Not Allowed",
-                [("Allow", "GET, HEAD, OPTIONS, POST")],
-            )
-
-        upgrade = request.headers.get("Upgrade", "")
-        connection_hdr = request.headers.get("Connection", "")
-        connection_tokens = {token.strip().lower() for token in connection_hdr.split(",") if token.strip()}
-        is_websocket_upgrade = upgrade.lower() == "websocket" and "upgrade" in connection_tokens
-        if is_websocket_upgrade:
-            return None
-
-        if path in ("/", "/index.html"):
-            index_path = os.path.join(os.path.dirname(__file__), "index.html")
-            if not os.path.isfile(index_path):
-                return Response(
-                    404,
-                    "Not Found",
-                    self._response_headers([("Content-Type", "text/plain; charset=utf-8")]),
-                    b"" if request_method == "HEAD" else b"index.html not found",
-                )
-            return self._serve_file_response(index_path, request_method=request_method, cache_control="no-cache")
-
-        if path.startswith("/emojis/"):
-            file_name = unquote(path[len("/emojis/"):]).strip()
-            file_path = self._resolve_emoji_file_path(file_name)
-            if not file_path:
-                return Response(
-                    404,
-                    "Not Found",
-                    self._response_headers([("Content-Type", "text/plain; charset=utf-8")]),
-                    b"" if request_method == "HEAD" else b"Emoji not found",
-                )
-            return self._serve_file_response(file_path, request_method=request_method, cache_control="public, max-age=3600")
-
-        if path.startswith("/server-assets/"):
-            asset_name = path[len("/server-assets/"):].strip("/")
-            file_path = self._resolve_server_asset_request(asset_name)
-            if not file_path:
-                return Response(
-                    404,
-                    "Not Found",
-                    self._response_headers([("Content-Type", "text/plain; charset=utf-8")]),
-                    b"" if request_method == "HEAD" else b"Server asset not found",
-                )
-            return self._serve_file_response(file_path, request_method=request_method, cache_control="public, max-age=3600")
-
-        if path == "/info":
-            return await self._handle_info_request()
-
-        return Response(
-            404,
-            "Not Found",
-            self._response_headers([("Content-Type", "text/plain; charset=utf-8")]),
-            b"" if request_method == "HEAD" else b"Not found",
-        )
-
-    async def handle_client(self, websocket):
-        """WebSocket connection handler"""
-        # Get client info
-        headers = websocket.request.headers
-        client_ip = headers.get('CF-Connecting-IP') or headers.get('X-Forwarded-For') or websocket.remote_address[0]
         Logger.add(f"New connection from {client_ip}")
-        
-        # Add to connected clients
-        self.connected_clients.add(websocket)
-        Logger.info(f"Total connected clients: {len(self.connected_clients)}")
-        
-        # Start heartbeat task
-        heartbeat_task = asyncio.create_task(heartbeat(websocket, self.heartbeat_interval))
-        
-        try:
-            # Generate a unique validator key for this connection
-            connection_validator_key = "originChats-" + secrets.token_urlsafe(24)
-            websocket.validator_key = connection_validator_key
 
-            # Send handshake message
-            await send_to_client(websocket, {
+        self.connected_clients.add(ws)
+        ws_id = id(ws)
+        self._ws_data[ws_id] = {"request": request}
+        Logger.info(f"Total connected clients: {len(self.connected_clients)}")
+
+        heartbeat_task = asyncio.create_task(heartbeat(ws, self.heartbeat_interval))
+
+        try:
+            connection_validator_key = "originChats-" + secrets.token_urlsafe(24)
+            self._ws_data[ws_id]["validator_key"] = connection_validator_key
+
+            await send_to_client(ws, {
                 "cmd": "handshake",
                 "val": {
                     "server": self.config["server"],
@@ -556,135 +396,135 @@ class OriginChatsServer:
                     "capabilities": self.capabilities
                 }
             })
-            # Keep connection open and handle client messages
-            async for message in websocket:
-                try:
-                    data = json.loads(message)
-                    
-                    # Handle authentication
-                    if data.get("cmd") == "auth" and not getattr(websocket, "authenticated", False):
-                        # Create server data object for authentication
-                        auth_server_data = {
+
+            async for msg in ws:
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    try:
+                        data = json.loads(msg.data)
+                        ws_data = self._ws_data.get(ws_id, {})
+
+                        if data.get("cmd") == "auth" and not ws_data.get("authenticated", False):
+                            auth_server_data = {
+                                "connected_clients": self.connected_clients,
+                                "connected_usernames": self.connected_usernames,
+                                "config": self.config,
+                                "plugin_manager": self.plugin_manager,
+                                "rate_limiter": self.rate_limiter,
+                                "_ws_data": self._ws_data
+                            }
+                            await handle_authentication(
+                                ws, data, self.config, self.connected_clients, client_ip, auth_server_data,
+                                validator_key=ws_data.get("validator_key")
+                            )
+                            continue
+
+                        if not ws_data.get("authenticated", False):
+                            await send_to_client(ws, {"cmd": "auth_error", "val": "Authentication required"})
+                            continue
+
+                        server_data = {
                             "connected_clients": self.connected_clients,
                             "connected_usernames": self.connected_usernames,
                             "config": self.config,
                             "plugin_manager": self.plugin_manager,
-                            "rate_limiter": self.rate_limiter
+                            "rate_limiter": self.rate_limiter,
+                            "send_to_client": send_to_client,
+                            "slash_commands": self.slash_commands,
+                            "voice_channels": self.voice_channels,
+                            "_ws_data": self._ws_data
                         }
-                        await handle_authentication(
-                            websocket, data, self.config,
-                            self.connected_clients, client_ip, auth_server_data,
-                            validator_key=getattr(websocket, "validator_key", None)
-                        )
-                        continue
 
-                    # Require authentication for other commands
-                    if not getattr(websocket, "authenticated", False):
-                        await send_to_client(websocket, {"cmd": "auth_error", "val": "Authentication required"})
-                        continue
+                        listener = data.get("listener")
+                        if listener and not isinstance(listener, str):
+                            Logger.warning(f"Invalid listener type: {type(listener)}")
+                            listener = None
 
-                    # Create server data object for message handler
-                    server_data = {
-                        "connected_clients": self.connected_clients,
-                        "connected_usernames": self.connected_usernames,
-                        "config": self.config,
-                        "plugin_manager": self.plugin_manager,
-                        "rate_limiter": self.rate_limiter,
-                        "send_to_client": send_to_client,
-                        "slash_commands": self.slash_commands,
-                        "voice_channels": self.voice_channels
-                    }
+                        response = await message_handler.handle(ws, data, server_data)
 
-                    listener = data.get("listener")
-                    if listener and not isinstance(listener, str):
-                        Logger.warning(f"Invalid listener type: {type(listener)}")
-                        listener = None
-                    # Handle message
-                    response = await message_handler.handle(websocket, data, server_data)
-                    
-                    if not response:
-                        Logger.warning(f"No response for message: {data}")
-                        continue
-                    
-                    if response.get("global", False):
-                        # Check if this is a channel-specific message
-                        if response.get("channel"):
-                            # Broadcast only to users who have access to the channel
-                            await broadcast_to_channel_except(self.connected_clients, response, response["channel"], websocket)
-                        else:
-                            # Broadcast to all clients if no channel specified
-                            await broadcast_to_all_except(self.connected_clients, response, websocket)
-                        
-                        if listener:
-                            response["listener"] = listener
-                        await send_to_client(websocket, response)
-                        continue
+                        if not response:
+                            Logger.warning(f"No response for message: {data}")
+                            continue
 
-                    if response:
-                        if listener:
-                            response["listener"] = listener
-                        await send_to_client(websocket, response)
+                        if response.get("global", False):
+                            if response.get("channel"):
+                                await broadcast_to_channel_except(self.connected_clients, response, response["channel"], ws)
+                            else:
+                                await broadcast_to_all_except(self.connected_clients, response, ws)
+                            if listener:
+                                response["listener"] = listener
+                            await send_to_client(ws, response)
+                            continue
 
-                except json.JSONDecodeError:
-                    Logger.error(f"Received invalid JSON: {message[:50]}...")
-                except Exception as e:
-                    Logger.error(f"Error processing message: {str(e)}")
-                    
-        except websockets.exceptions.ConnectionClosed:
-            Logger.info(f"Connection closed by {client_ip}")
+                        if response:
+                            if listener:
+                                response["listener"] = listener
+                            await send_to_client(ws, response)
+
+                    except json.JSONDecodeError:
+                        Logger.error(f"Received invalid JSON: {msg.data[:50]}...")
+                    except Exception as e:
+                        Logger.error(f"Error processing message: {str(e)}")
+
+                elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE):
+                    break
+
         except Exception as e:
             Logger.error(f"Error handling connection: {str(e)}")
         finally:
             heartbeat_task.cancel()
-            if websocket in self.connected_clients:
-                self.connected_clients.remove(websocket)
-                Logger.delete(f"Client {client_ip} removed. {len(self.connected_clients)} clients remaining")
+            if ws in self.connected_clients:
+                self.connected_clients.remove(ws)
+            if ws_id in self._ws_data:
+                ws_data = self._ws_data.pop(ws_id, {})
+            else:
+                ws_data = {}
+            Logger.delete(f"Client {client_ip} removed. {len(self.connected_clients)} clients remaining")
 
-                username = getattr(websocket, "username", "")
+            username = ws_data.get("username", "")
 
-                if getattr(websocket, "authenticated", False):
-                    user_id = getattr(websocket, "user_id", None)
-                    current_voice_channel = getattr(websocket, "voice_channel", None)
+            if ws_data.get("authenticated", False):
+                user_id = ws_data.get("user_id")
+                current_voice_channel = ws_data.get("voice_channel")
 
-                    if user_id and current_voice_channel:
-                        if current_voice_channel in self.voice_channels and user_id in self.voice_channels[current_voice_channel]:
-                            msg = {"cmd": "voice_user_left", "channel": current_voice_channel, "username": username}
-                            await broadcast_to_voice_channel_with_viewers(
-                                self.connected_clients,
-                                self.voice_channels,
-                                msg,
-                                msg,
-                                current_voice_channel
-                            )
+                if user_id and current_voice_channel:
+                    if current_voice_channel in self.voice_channels and user_id in self.voice_channels[current_voice_channel]:
+                        msg_out = {"cmd": "voice_user_left", "channel": current_voice_channel, "username": username}
+                        await broadcast_to_voice_channel_with_viewers(
+                            self.connected_clients,
+                            self.voice_channels,
+                            msg_out,
+                            msg_out,
+                            current_voice_channel,
+                            {"_ws_data": self._ws_data}
+                        )
+                        del self.voice_channels[current_voice_channel][user_id]
+                        if not self.voice_channels[current_voice_channel]:
+                            del self.voice_channels[current_voice_channel]
 
-                            del self.voice_channels[current_voice_channel][user_id]
+                if ws_id in self.slash_commands:
+                    command_names = list(self.slash_commands[ws_id].keys())
+                    if command_names:
+                        await broadcast_to_all(self.connected_clients, {
+                            "cmd": "slash_remove",
+                            "commands": command_names
+                        })
+                        Logger.info(f"Removed {len(command_names)} slash commands for connection {ws_id}")
+                    del self.slash_commands[ws_id]
 
-                            if not self.voice_channels[current_voice_channel]:
-                                del self.voice_channels[current_voice_channel]
+                if username in self.connected_usernames:
+                    self.connected_usernames[username] -= 1
+                    if self.connected_usernames[username] <= 0:
+                        del self.connected_usernames[username]
+                        await broadcast_to_all(self.connected_clients, {
+                            "cmd": "user_disconnect",
+                            "username": username
+                        }, {"_ws_data": self._ws_data})
+                        Logger.success(f"Broadcast user_disconnect: {username}")
+                    else:
+                        Logger.info(f"User {username} still has {self.connected_usernames[username]} active connection(s)")
 
-                    ws_id = id(websocket)
-                    if ws_id in self.slash_commands:
-                        command_names = list(self.slash_commands[ws_id].keys())
-                        if command_names:
-                            await broadcast_to_all(self.connected_clients, {
-                                "cmd": "slash_remove",
-                                "commands": command_names
-                            })
-                            Logger.info(f"Removed {len(command_names)} slash commands for connection {ws_id}")
-                        del self.slash_commands[ws_id]
+        return ws
 
-                    if username in self.connected_usernames:
-                        self.connected_usernames[username] -= 1
-                        if self.connected_usernames[username] <= 0:
-                            del self.connected_usernames[username]
-                            await broadcast_to_all(self.connected_clients, {
-                                "cmd": "user_disconnect",
-                                "username": username
-                            })
-                            Logger.success(f"Broadcast user_disconnect: {username}")
-                        else:
-                            Logger.info(f"User {username} still has {self.connected_usernames[username]} active connection(s)")
-    
     async def broadcast_wrapper(self, message):
         """Wrapper for broadcast_to_all to maintain compatibility with watchers"""
         await broadcast_to_all(self.connected_clients, message)
@@ -693,16 +533,24 @@ class OriginChatsServer:
         """Start the WebSocket server"""
         # Store the main event loop for use in other threads
         self.main_event_loop = asyncio.get_event_loop()
-
-        # Setup file watchers for users.json and channels.json
-        self.file_observer = watchers.setup_file_watchers(self.broadcast_wrapper, self.main_event_loop, lambda: self.connected_clients)
+        self.file_observer = watchers.setup_file_watchers(
+            self.broadcast_wrapper, self.main_event_loop, lambda: self.connected_clients, lambda: {
+                "connected_clients": self.connected_clients,
+                "config": self.config,
+                "plugin_manager": self.plugin_manager,
+                "rate_limiter": self.rate_limiter,
+                "slash_commands": self.slash_commands,
+                "voice_channels": self.voice_channels,
+                "_ws_data": self._ws_data,
+                "send_to_client": send_to_client
+            }
+        )
 
         port = self.config.get("websocket", {}).get("port", 5613)
         host = self.config.get("websocket", {}).get("host", "127.0.0.1")
-        
-        Logger.info(f"Starting WebSocket server on {host}:{port}")
-        
-        # Trigger server_start event for plugins
+
+        Logger.info(f"Starting server on {host}:{port}")
+
         server_data = {
             "connected_clients": self.connected_clients,
             "config": self.config,
@@ -710,22 +558,40 @@ class OriginChatsServer:
             "rate_limiter": self.rate_limiter
         }
         self.plugin_manager.trigger_event("server_start", None, {}, server_data)
-        
+
+        app = web.Application()
+
+        # OPTIONS preflight for all routes
+        app.router.add_route("OPTIONS", "/{path_info:.*}", self._route_options)
+
+        # WebSocket on root path only
+        app.router.add_get("/", self._route_websocket)
+
+        # HTTP routes
+        app.router.add_get("/index.html", self._route_index)
+        app.router.add_get("/info", self._route_info)
+        app.router.add_get("/emojis/{filename}", self._route_emoji)
+        app.router.add_get("/server-assets/{name}", self._route_server_asset)
+
+        # Webhook (POST)
+        app.router.add_post("/webhooks", self._route_webhook)
+        app.router.add_post("/webhooks/{path_info:.*}", self._route_webhook)
+
+        # 404 handler for unknown HTTP routes
+        app.router.add_get("/{path_info:.*}", self._route_404)
+
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, host, port)
+        await site.start()
+
+        Logger.success(f"Server running at ws://{host}:{port}")
+
         try:
-            async with websockets.serve(
-                self.handle_client,
-                host,
-                port,
-                ping_interval=None,
-                process_request=self._process_http_request,
-            ):
-                Logger.success(f"WebSocket server running at ws://{host}:{port}")
-                
-                # Keep the server running
-                await asyncio.Future()
+            await asyncio.Future()  # run forever
         finally:
-            # Stop file watcher when server stops
             if self.file_observer:
                 self.file_observer.stop()
                 self.file_observer.join()
                 Logger.info("File watcher stopped")
+            await runner.cleanup()

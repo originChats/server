@@ -1174,29 +1174,14 @@ def update_channel(channel_name, updates):
     with _lock:
         channels = copy.deepcopy(_get_channels_cache())
 
-        for channel in channels:
-            if channel.get('name') == channel_name:
-                old_name = channel_name
+    for channel in channels:
+        if channel.get('name') == channel_name:
+            for key, value in updates.items():
+                if key in ['name', 'type', 'description', 'permissions']:
+                    channel[key] = value
 
-                for key, value in updates.items():
-                    if key in ['name', 'type', 'description', 'permissions', 'wallpaper', 'size']:
-                        channel[key] = value
+            _save_channels_index(channels)
 
-                new_name = channel.get('name', old_name)
-
-                if new_name != old_name and channel.get('type') != 'separator':
-                    old_file_path = os.path.join(channels_db_dir, old_name + ".json")
-                    new_file_path = os.path.join(channels_db_dir, new_name + ".json")
-
-                    _save_channels_index(channels)
-
-                    if os.path.exists(old_file_path):
-                        os.replace(old_file_path, new_file_path)
-                    if old_name in _msg_cache:
-                        _msg_cache[new_name] = _msg_cache.pop(old_name)
-                else:
-                    _save_channels_index(channels)
-
-                return True
+            return True
 
     return False

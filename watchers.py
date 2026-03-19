@@ -10,10 +10,11 @@ from handlers.websocket_utils import send_to_client
 class FileWatcher(FileSystemEventHandler):
     """File system event handler for watching JSON files"""
 
-    def __init__(self, broadcast_func, main_loop, connected_clients_getter):
+    def __init__(self, broadcast_func, main_loop, connected_clients_getter, server_data_getter=None):
         self.broadcast_func = broadcast_func
         self.main_loop = main_loop
         self.connected_clients_getter = connected_clients_getter
+        self.server_data_getter = server_data_getter
 
         # Cache for tracking changes
         self._users_cache = {}
@@ -79,11 +80,16 @@ class FileWatcher(FileSystemEventHandler):
             connected_clients = self.connected_clients_getter()
             disconnected = set()
 
+            server_data = self.server_data_getter() if self.server_data_getter else {}
+            _ws_data_all = server_data.get("_ws_data", {}) if server_data else {}
+
             for ws in connected_clients.copy():
-                if not getattr(ws, 'authenticated', False):
+                ws_data = _ws_data_all.get(id(ws), {})
+
+                if not ws_data.get("authenticated", False):
                     continue
 
-                user_id = getattr(ws, 'user_id', None)
+                user_id = ws_data.get("user_id")
                 if not user_id:
                     continue
 
@@ -145,14 +151,14 @@ class FileWatcher(FileSystemEventHandler):
         except Exception as e:
             Logger.error(f"Error broadcasting nickname changes: {e}")
 
-def setup_file_watchers(broadcast_func, main_loop, connected_clients_getter):
+def setup_file_watchers(broadcast_func, main_loop, connected_clients_getter, server_data_getter=None):
     """Setup file watchers for users.json and channels.json"""
 
     # Get the database directory
     db_dir = os.path.dirname(users.users_index)
 
     # Create event handler
-    event_handler = FileWatcher(broadcast_func, main_loop, connected_clients_getter)
+    event_handler = FileWatcher(broadcast_func, main_loop, connected_clients_getter, server_data_getter)
 
     # Create observer
     observer = Observer()

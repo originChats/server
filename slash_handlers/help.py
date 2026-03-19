@@ -4,6 +4,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from slash_handlers import SERVER_SLASH_HANDLERS
+from handlers.websocket_utils import _get_ws_attr
 
 
 def get_command_info():
@@ -73,7 +74,7 @@ def _get_client_commands(server_data, user_roles):
 
 
 async def handle(ws, args, channel, server_data):
-    user_id = getattr(ws, "user_id", None)
+    user_id = _get_ws_attr(ws, server_data, "user_id")
     user_roles = []
     
     if server_data and "connected_clients" in server_data:

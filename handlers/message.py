@@ -7,13 +7,12 @@ import slash_handlers
 from pydantic import ValidationError
 from schemas.slash_command_schema import SlashCommand
 from schemas.server_emoji_schema import Emoji_add, Emoji_delete, Emoji_get_all, Emoji_update, Emoji_get_filename, Emoji_get_id
-from handlers.websocket_utils import broadcast_to_voice_channel_with_viewers, broadcast_to_all
+from handlers.websocket_utils import broadcast_to_voice_channel_with_viewers, broadcast_to_all, _get_ws_attr, _set_ws_attr
 from handlers import push as push_handler
 from typing import TypeVar
 import copy
 
 T = TypeVar("T")
-
 
 def _error(error_message, match_cmd):
     """Helper function to format error responses with the command that caused them"""
@@ -25,11 +24,14 @@ def _config_value(server_data, *path: str, default: T) -> T:
     config = server_data.get("config") if isinstance(server_data, dict) else None
     return get_config_value(*path, default=default, config=config)
 
-def _require_user_id(ws, error_message = "User not authenticated"):
-    user_id = getattr(ws, "user_id", None)
+def _require_user_id(ws, error_message: str = "User not authenticated"):
+    user_id = _get_ws_attr(ws, "user_id")
     if not user_id:
         return None, _error(error_message, None)
     return user_id, None
+
+def _get_ws_username(ws):
+    return _get_ws_attr(ws, "username", users.get_username_by_id(_get_ws_attr(ws, "user_id", "")))
 
 def _require_user_roles(user_id, *, requiredRoles = [], forbiddenRoles = [], missing_roles_message = "User roles not found"):
     user_roles = users.get_user_roles(user_id)
@@ -290,27 +292,30 @@ def _require_voice_channel_access(user_id, channel_name, match_cmd):
 
 
 def _require_voice_channel_membership(ws, server_data, match_cmd):
-    user_id = getattr(ws, "user_id", None)
+    ws_id = id(ws)
+    _ws_data = server_data.get("_ws_data", {}) if server_data else {}
+    ws_data = _ws_data.get(ws_id, {})
+    user_id = ws_data.get("user_id")
     if not user_id:
         return None, None, _error("Authentication required", match_cmd)
-    
+
     if not server_data:
         return None, None, _error("Server data not available", match_cmd)
-    
+
     voice_channels = server_data.get("voice_channels", {})
-    current_channel = getattr(ws, "voice_channel", None)
-    
+    current_channel = ws_data.get("voice_channel")
+
     if not current_channel:
         return None, None, _error("You are not in a voice channel", match_cmd)
-    
+
     if current_channel not in voice_channels:
-        ws.voice_channel = None
+        ws_data["voice_channel"] = None
         return None, None, _error("Voice channel no longer exists", match_cmd)
-    
+
     if user_id not in voice_channels[current_channel]:
-        ws.voice_channel = None
+        ws_data["voice_channel"] = None
         return None, None, _error("You are not in this voice channel", match_cmd)
-    
+
     return user_id, current_channel, None
 
 
@@ -368,7 +373,7 @@ async def handle(ws, message, server_data=None):
                 thread_id = message.get("thread_id")
                 content = message.get("content")
                 reply_to = message.get("reply_to")
-                user_id = getattr(ws, 'user_id', None)
+                user_id = _get_ws_attr(ws, "user_id")
 
                 if (not channel_name and not thread_id) or not content or not user_id:
                     missing_fields = []
@@ -546,7 +551,7 @@ async def handle(ws, message, server_data=None):
                 else:
                     return {"cmd": "message_new", "message": out_msg_for_client, "channel": channel_name, "global": True}
             case "typing":
-                user_id, error = _require_user_id(ws)
+                user_id, error = _require_user_id(ws, server_data)
                 if error:
                     return error
 
@@ -573,7 +578,7 @@ async def handle(ws, message, server_data=None):
 
                 return {"cmd": "typing", "user": username, "channel": channel_name, "global": True}
             case "message_edit":
-                user_id, error = _require_user_id(ws)
+                user_id, error = _require_user_id(ws, server_data)
                 if error:
                     return error
                 
@@ -664,7 +669,7 @@ async def handle(ws, message, server_data=None):
                             edited_msg["pings"] = pings
                     return {"cmd": "message_edit", "id": message_id, "content": new_content, "message": edited_msg, "channel": channel_name, "global": True}
             case "message_delete":
-                user_id, error = _require_user_id(ws)
+                user_id, error = _require_user_id(ws, server_data)
                 if error:
                     return error
                 
@@ -732,7 +737,6 @@ async def handle(ws, message, server_data=None):
                         }, server_data)
                     return {"cmd": "message_delete", "id": message_id, "channel": channel_name, "global": True}
             case "message_pin":
-                # Handle request to pin a message
                 user_id, error = _require_user_id(ws, "Authentication required")
                 if error:
                     return error
@@ -764,7 +768,6 @@ async def handle(ws, message, server_data=None):
                     }, server_data)
                 return {"cmd": "message_pin", "id": message_id, "channel": channel_name, "pinned": pinned, "global": True}
             case "message_unpin":
-                # Handle request to unpin a message
                 user_id, error = _require_user_id(ws, "Authentication required")
                 if error:
                     return error
@@ -801,7 +804,7 @@ async def handle(ws, message, server_data=None):
                 if not channel_name:
                     return _error("Channel name not provided", match_cmd)
                 
-                user_id, error = _require_user_id(ws)
+                user_id, error = _require_user_id(ws, server_data)
                 if error:
                     return error
                 _, error = _require_text_channel_access(user_id, channel_name)
@@ -819,7 +822,7 @@ async def handle(ws, message, server_data=None):
                 if not channel_name or not query:
                     return _error("Channel name and query are required", match_cmd)
                 
-                user_id, error = _require_user_id(ws)
+                user_id, error = _require_user_id(ws, server_data)
                 if error:
                     return error
                 _, error = _require_text_channel_access(user_id, channel_name)
@@ -933,7 +936,7 @@ async def handle(ws, message, server_data=None):
                 limit = message.get("limit", 100)
                 end = start + limit
 
-                user_id, error = _require_user_id(ws)
+                user_id, error = _require_user_id(ws, server_data)
                 if error:
                     return error
                 
@@ -971,7 +974,7 @@ async def handle(ws, message, server_data=None):
                 if not message_id or (not channel_name and not thread_id):
                     return _error("Channel/thread and message ID are required", match_cmd)
 
-                user_id, error = _require_user_id(ws)
+                user_id, error = _require_user_id(ws, server_data)
                 if error:
                     return error
 
@@ -1014,7 +1017,7 @@ async def handle(ws, message, server_data=None):
                 if not channel_name or not message_id:
                     return _error("Channel name and message ID are required", match_cmd)
 
-                user_id, error = _require_user_id(ws)
+                user_id, error = _require_user_id(ws, server_data)
                 if error:
                     return error
                 _, error = _require_text_channel_access(user_id, channel_name)
@@ -1028,7 +1031,7 @@ async def handle(ws, message, server_data=None):
                 return {"cmd": "message_replies", "channel": channel_name, "message_id": message_id, "replies": replies}
             case "channels_get":
                 # Handle request for available channels
-                user_id, error = _require_user_id(ws)
+                user_id, error = _require_user_id(ws, server_data)
                 if error:
                     return error
                 user_data = users.get_user(user_id)
@@ -1086,10 +1089,12 @@ async def handle(ws, message, server_data=None):
                 if server_data and server_data.get("rate_limiter") and server_data.get("connected_clients"):
                     server_data["rate_limiter"].set_user_timeout(target_id, timeout)
                     clients = server_data["connected_clients"]
+                    _ws_data_all = server_data.get("_ws_data", {})
                     user_ws = None
-                    for ws in clients:
-                        if getattr(ws, "user_id", None) == target_id:
-                            user_ws = ws
+                    for client_ws in clients:
+                        client_ws_data = _ws_data_all.get(id(client_ws), {})
+                        if client_ws_data.get("user_id") == target_id:
+                            user_ws = client_ws
                             break
                     if user_ws:
                         asyncio.create_task(server_data["send_to_client"](user_ws, {
@@ -1184,54 +1189,57 @@ async def handle(ws, message, server_data=None):
                 return {"cmd": "user_leave", "user": username, "val": "User left server"}
             case "users_list":
                 # Handle request for all users list
-                _, error = _require_user_id(ws)
+                _, error = _require_user_id(ws, server_data)
                 if error:
                     return error
-                
+
                 users_list = users.get_users()
                 return {"cmd": "users_list", "users": users_list}
             case "users_online":
-                # Handle request for online users list  
-                _, error = _require_user_id(ws)
+                # Handle request for online users list
+                _, error = _require_user_id(ws, server_data)
                 if error:
                     return error
-                
+
                 if not server_data or "connected_clients" not in server_data:
                     return _error("Server data not available", match_cmd)
-                
+
                 # Gather authenticated users' info efficiently
                 online_users = []
+                _ws_data_all = server_data.get("_ws_data", {})
                 for client_ws in server_data["connected_clients"]:
-                    if getattr(client_ws, "authenticated", False):
-                        client_user_id = getattr(client_ws, 'user_id', None)
-                        if not client_user_id:
-                            continue
-                        user_data = users.get_user(client_user_id)
-                        if not user_data:
-                            continue
-                        
-                        # Get the color of the first role
-                        user_roles = user_data.get("roles", [])
-                        color = None
-                        if user_roles:
-                            first_role_name = user_roles[0]
-                            first_role_data = roles.get_role(first_role_name)
-                            if first_role_data:
-                                color = first_role_data.get("color")
-                        
-                        # Use the username from user data (which supports username changes)
-                        username = user_data.get("username", client_user_id)
-                        online_users.append({
-                            "username": username,
-                            "nickname": user_data.get("nickname"),
-                            "roles": user_data.get("roles"),
-                            "color": color
-                        })
+                    client_ws_data = _ws_data_all.get(id(client_ws), {})
+                    if not client_ws_data.get("authenticated", False):
+                        continue
+                    client_user_id = client_ws_data.get("user_id")
+                    if not client_user_id:
+                        continue
+                    user_data = users.get_user(client_user_id)
+                    if not user_data:
+                        continue
+                    
+                    # Get the color of the first role
+                    user_roles = user_data.get("roles", [])
+                    color = None
+                    if user_roles:
+                        first_role_name = user_roles[0]
+                        first_role_data = roles.get_role(first_role_name)
+                        if first_role_data:
+                            color = first_role_data.get("color")
+                    
+                    # Use the username from user data (which supports username changes)
+                    username = user_data.get("username", client_user_id)
+                    online_users.append({
+                        "username": username,
+                        "nickname": user_data.get("nickname"),
+                        "roles": user_data.get("roles"),
+                        "color": color
+                    })
                 
                 return {"cmd": "users_online", "users": online_users}
             case "plugins_list":
                 # Handle request for loaded plugins (admin only)
-                user_id, error = _require_user_id(ws)
+                user_id, error = _require_user_id(ws, server_data)
                 if error:
                     return error
                 _, error = _require_user_roles(user_id, requiredRoles=["owner"])
@@ -1245,7 +1253,7 @@ async def handle(ws, message, server_data=None):
                 return {"cmd": "plugins_list", "plugins": plugins}
             case "plugins_reload":
                 # Handle request to reload plugins (admin only)
-                user_id, error = _require_user_id(ws)
+                user_id, error = _require_user_id(ws, server_data)
                 if error:
                     return error
                 _, error = _require_user_roles(user_id, requiredRoles=["owner"])
@@ -1269,7 +1277,7 @@ async def handle(ws, message, server_data=None):
                     return {"cmd": "plugins_reload", "val": "All plugins reloaded successfully"}
             case "rate_limit_status":
                 # Handle request for rate limit status (admin or self)
-                user_id, error = _require_user_id(ws)
+                user_id, error = _require_user_id(ws, server_data)
                 if error:
                     return error
                 
@@ -1291,7 +1299,7 @@ async def handle(ws, message, server_data=None):
                 return {"cmd": "rate_limit_status", "user": status_username, "status": status}
             case "rate_limit_reset":
                 # Handle request to reset rate limit for a user (admin only)
-                user_id, error = _require_user_id(ws)
+                user_id, error = _require_user_id(ws, server_data)
                 if error:
                     return error
                 _, error = _require_user_roles(user_id, requiredRoles=["owner"])
@@ -1332,14 +1340,13 @@ async def handle(ws, message, server_data=None):
 
                 username = users.get_username_by_id(user_id)
 
+                _ws_data_all = server_data.get("_ws_data", {})
                 for client_ws in connected_clients:
-                    try:
-                        if client_ws != ws:
-                            client_user_id = getattr(client_ws, "user_id", None)
-                            if client_user_id == user_id:
-                                return _error("You already have slash commands registered from another session", match_cmd)
-                    except (AttributeError, TypeError):
-                        continue
+                    if client_ws != ws:
+                        client_ws_data = _ws_data_all.get(id(client_ws), {})
+                        client_user_id = client_ws_data.get("user_id")
+                        if client_user_id == user_id:
+                            return _error("You already have slash commands registered from another session", match_cmd)
 
                 slash_commands[id(ws)] = {}
 
@@ -1518,7 +1525,7 @@ async def handle(ws, message, server_data=None):
                 commander_ws = None
 
                 for client_ws in connected_clients:
-                    if getattr(client_ws, "user_id", None) == commander_user_id:
+                    if _get_ws_attr(client_ws, "user_id") == commander_user_id:
                         commander_ws = client_ws
                         break
 
@@ -1604,36 +1611,38 @@ async def handle(ws, message, server_data=None):
                 
                 if not server_data:
                     return _error("Server data not available", match_cmd)
-                
+
                 voice_channels = server_data.get("voice_channels", {})
-                username = getattr(ws, "username", users.get_username_by_id(user_id))
-                
-                current_channel = getattr(ws, "voice_channel", None)
+                _ws_data = server_data.get("_ws_data", {})
+                ws_data = _ws_data.get(id(ws), {})
+                username = ws_data.get("username", users.get_username_by_id(user_id))
+
+                current_channel = ws_data.get("voice_channel")
                 if current_channel:
                     if current_channel in voice_channels and user_id in voice_channels[current_channel]:
                         msg = {"cmd": "voice_user_left", "channel": current_channel, "username": username}
                         await broadcast_to_voice_channel_with_viewers(
                             server_data["connected_clients"],
                             voice_channels,
-                            msg,
-                            msg,
-                            current_channel
+                            msg, msg,
+                            current_channel,
+                            server_data
                         )
                         del voice_channels[current_channel][user_id]
                         if not voice_channels[current_channel]:
                             del voice_channels[current_channel]
-                    ws.voice_channel = None
-                
+                        _set_ws_attr(ws, "voice_channel", None)
+
                 if channel_name not in voice_channels:
                     voice_channels[channel_name] = {}
-                
+
                 voice_channels[channel_name][user_id] = {
                     "peer_id": peer_id,
                     "username": username,
                     "muted": False
                 }
-                
-                ws.voice_channel = channel_name
+
+                _set_ws_attr(ws, "voice_channel", channel_name)
                 
                 participants = []
                 for uid, data in voice_channels[channel_name].items():
@@ -1661,40 +1670,44 @@ async def handle(ws, message, server_data=None):
 
                 if not server_data:
                     return _error("Server data not available", match_cmd)
-                
+
                 voice_channels = server_data.get("voice_channels", {})
-                username = getattr(ws, "username", users.get_username_by_id(user_id))
-                
+                _ws_data = server_data.get("_ws_data", {})
+                ws_data = _ws_data.get(id(ws), {})
+                username = ws_data.get("username", users.get_username_by_id(user_id))
+
                 msg = {"cmd": "voice_user_left", "channel": current_channel, "username": username}
                 await broadcast_to_voice_channel_with_viewers(
                     server_data["connected_clients"],
                     voice_channels,
-                    msg,
-                    msg,
-                    current_channel
+                    msg, msg,
+                    current_channel,
+                    server_data
                 )
-                
+
                 del voice_channels[current_channel][user_id]
                 if not voice_channels[current_channel]:
                     del voice_channels[current_channel]
-                
-                ws.voice_channel = None
-                
+
+                _set_ws_attr(ws, server_data, "voice_channel", None)
+
                 return {"cmd": "voice_leave", "channel": current_channel}
-            
+
             case "voice_mute" | "voice_unmute":
                 user_id, current_channel, error = _require_voice_channel_membership(ws, server_data, match_cmd)
                 if error:
                     return error
-                
+
                 if not server_data:
                     return _error("Server data not available", match_cmd)
-                
+
                 voice_channels = server_data.get("voice_channels", {})
                 muted = match_cmd == "voice_mute"
-                
+
                 voice_channels[current_channel][user_id]["muted"] = muted
-                username = getattr(ws, "username", users.get_username_by_id(user_id))
+                _ws_data = server_data.get("_ws_data", {})
+                ws_data = _ws_data.get(id(ws), {})
+                username = ws_data.get("username", users.get_username_by_id(user_id))
                 peer_id = voice_channels[current_channel][user_id]["peer_id"]
                 
                 await _broadcast_voice_event(
@@ -2318,9 +2331,9 @@ async def handle(ws, message, server_data=None):
             case "push_get_vapid":
                 return await push_handler.handle_push_get_vapid(ws)
             case "push_subscribe":
-                return await push_handler.handle_push_subscribe(ws, message)
+                return await push_handler.handle_push_subscribe(ws, message, server_data)
             case "push_unsubscribe":
-                return await push_handler.handle_push_unsubscribe(ws, message)
+                return await push_handler.handle_push_unsubscribe(ws, message, server_data)
             case "thread_create":
                 user_id, error = _require_user_id(ws, "Authentication required")
                 if error:

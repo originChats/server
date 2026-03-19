@@ -7,6 +7,7 @@ import uuid
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db import channels, users, roles
+from handlers.websocket_utils import broadcast_to_all, _get_ws_data, _get_ws_attr
 from logger import Logger
 
 REQUIRED_PERMISSIONS = ["owner", "admin"]
@@ -22,12 +23,12 @@ def getInfo():
 
 
 class CommandHandler:
-    
+
     def __init__(self, ws, channel, server_data):
         self.ws = ws
         self.channel = channel
         self.server_data = server_data
-        self.username = getattr(ws, 'username', None)
+        self.username = _get_ws_attr(ws, "username")
         
     def reply(self, message):
         send_message_to_channel(self.channel, message, self.server_data)
@@ -452,11 +453,11 @@ def send_message_to_channel(channel, content, server_data):
 
 
 def on_new_message(ws, message_data, server_data=None):
-    if not ws or not getattr(ws, 'authenticated', False):
+    if not ws or not _get_ws_attr(ws, "authenticated", False):
         Logger.warning("Authentication check failed")
         return
-    
-    user_id = message_data.get('user_id', getattr(ws, 'user_id', None))
+
+    user_id = message_data.get('user_id', _get_ws_attr(ws, "user_id"))
     user_roles = users.get_user_roles(user_id)
     
     if not user_roles or not any(role in user_roles for role in REQUIRED_PERMISSIONS):

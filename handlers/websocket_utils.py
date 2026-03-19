@@ -1,16 +1,41 @@
-import asyncio, json, websockets
+import asyncio
+import aiohttp
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logger import Logger
 
+_ws_data = {}
+
+def set_ws_data(data_dict):
+    """Set the global _ws_data reference (called by server on init)"""
+    global _ws_data
+    _ws_data = data_dict
+
+def _get_ws_data(ws):
+    """Get ws data from _ws_data dict using ws id"""
+    return _ws_data.get(id(ws), {})
+
+def _get_ws_attr(ws, attr: str, default=None):
+    """Get an attribute from ws data"""
+    ws_data = _get_ws_data(ws)
+    return ws_data.get(attr, default)
+
+def _set_ws_attr(ws, attr: str, value):
+    """Set an attribute in ws data"""
+    ws_data_dict = _ws_data
+    ws_id = id(ws)
+    if ws_id not in ws_data_dict:
+        ws_data_dict[ws_id] = {}
+    ws_data_dict[ws_id][attr] = value
+
 async def send_to_client(ws, message):
     """Send a message to a specific client"""
     try:
-        await ws.send(json.dumps(message))
+        await ws.send_json(message)
         return True
-    except websockets.exceptions.ConnectionClosed:
-        Logger.warning("Connection closed when trying to send message")
+    except (aiohttp.WebSocketError, ConnectionResetError, BrokenPipeError) as e:
+        Logger.warning(f"Connection closed when trying to send message: {e}")
         return False
     except Exception as e:
         Logger.error(f"Error sending message: {str(e)}")
@@ -28,11 +53,11 @@ async def heartbeat(ws, heartbeat_interval=30):
     except Exception as e:
         Logger.error(f"Heartbeat error: {str(e)}")
 
-async def broadcast_to_all(connected_clients, message):
+async def broadcast_to_all(connected_clients, message, server_data=None):
     """Broadcast a message to all connected clients"""
-    return await broadcast_to_all_except(connected_clients, message, None)
+    return await broadcast_to_all_except(connected_clients, message, None, server_data)
 
-async def broadcast_to_all_except(connected_clients, message, except_client):
+async def broadcast_to_all_except(connected_clients, message, except_client, server_data=None):
     """Broadcast a message to all connected clients except the specified client"""
     from db import channels
 
@@ -42,16 +67,16 @@ async def broadcast_to_all_except(connected_clients, message, except_client):
     for ws in clients_copy:
         if ws == except_client:
             continue
-        if not getattr(ws, 'authenticated', False):
+        ws_data = _get_ws_data(ws)
+        if not ws_data.get("authenticated", False):
             continue
-        user_id = getattr(ws, 'user_id', None)
+        user_id = ws_data.get("user_id")
         if user_id is None:
             continue
         success = await send_to_client(ws, message)
         if not success:
             disconnected.add(ws)
 
-    # Clean up disconnected clients
     for ws in disconnected:
         connected_clients.discard(ws)
 
@@ -60,72 +85,74 @@ async def broadcast_to_all_except(connected_clients, message, except_client):
 
     return disconnected
 
-async def broadcast_to_channel(connected_clients, message, channel_name) -> set:
+async def broadcast_to_channel(connected_clients, message, channel_name, server_data=None) -> set:
     """Broadcast a message to all connected clients who have access to the specified channel"""
-    return await broadcast_to_channel_except(connected_clients, message, channel_name, None)
+    return await broadcast_to_channel_except(connected_clients, message, channel_name, None, server_data)
 
-async def broadcast_to_channel_except(connected_clients, message, channel_name, except_client):
+async def broadcast_to_channel_except(connected_clients, message, channel_name, except_client, server_data=None):
     """Broadcast a message to all connected clients who have access to the specified channel except the specified client"""
     from db import channels
-    
+
     disconnected = set()
     sent_count = 0
-    
+
     clients_copy = connected_clients.copy()
-    
+
     for ws in clients_copy:
         if ws == except_client:
             continue
 
-        if not getattr(ws, 'authenticated', False):
+        ws_data = _get_ws_data(ws)
+        if not ws_data.get("authenticated", False):
             continue
-            
-        user_id = getattr(ws, 'user_id', None)
+
+        user_id = ws_data.get("user_id")
         if not user_id:
             continue
-        
-        user_roles = getattr(ws, 'user_roles', None)
+
+        user_roles = ws_data.get("user_roles")
         if user_roles is None:
             from db import users
             user_data = users.get_user(user_id)
             if user_data:
                 user_roles = user_data.get("roles", [])
-                ws.user_roles = user_roles
+                ws_data["user_roles"] = user_roles
             else:
                 continue
-        
+
         if channels.does_user_have_permission(channel_name, user_roles, "view"):
             success = await send_to_client(ws, message)
             if not success:
                 disconnected.add(ws)
             else:
                 sent_count += 1
-    
+
     for ws in disconnected:
         connected_clients.discard(ws)
-    
+
     if disconnected:
         Logger.delete(f"Removed {len(disconnected)} disconnected clients")
-    
+
     return disconnected
 
-async def disconnect_user(connected_clients, identifier, reason="User disconnected"):
+async def disconnect_user(connected_clients, identifier, reason="User disconnected", server_data=None):
     """Disconnect a specific user by username or user ID"""
     from db import users
-    
+
     disconnected = []
     clients_copy = connected_clients.copy()
-    
-    # Try to get user ID if username is provided
+
     target_user_id = identifier
-    if identifier and not identifier.startswith(("USR:", "usr_")):  # Likely a username
+    if identifier and not identifier.startswith(("USR:", "usr_")):
         lookup_user_id = users.get_id_by_username(identifier)
         if lookup_user_id:
             target_user_id = lookup_user_id
-    
+
     for ws in clients_copy:
-        ws_user_id = getattr(ws, 'user_id', None)
-        if hasattr(ws, 'username') and (ws.username == identifier or ws_user_id == target_user_id):
+        ws_data = _get_ws_data(ws)
+        ws_user_id = ws_data.get("user_id")
+        ws_username = ws_data.get("username")
+        if ws_username == identifier or ws_user_id == target_user_id:
             try:
                 await send_to_client(ws, {"cmd": "disconnect", "reason": reason})
                 await ws.close()
@@ -134,100 +161,96 @@ async def disconnect_user(connected_clients, identifier, reason="User disconnect
             except Exception as e:
                 Logger.error(f"Error disconnecting user {identifier}: {str(e)}")
                 disconnected.append(ws)
-    
-    # Clean up disconnected clients
+
     for ws in disconnected:
         connected_clients.discard(ws)
-    
+
     return len(disconnected)
 
-async def broadcast_to_voice_channel(connected_clients, voice_channels, message, channel_name):
+async def broadcast_to_voice_channel(connected_clients, voice_channels, message, channel_name, server_data=None):
     """Broadcast a message to all connected clients who are in a specific voice channel"""
     disconnected = set()
     sent_count = 0
-    
-    # Get participants in this voice channel
+
     participants = voice_channels.get(channel_name, {})
     if not participants:
         return disconnected
-    
-    # Create a copy of the set to avoid "Set changed size during iteration" error
+
     clients_copy = connected_clients.copy()
-    
+
     for ws in clients_copy:
-        # Only send to authenticated users
-        if not getattr(ws, 'authenticated', False):
+        ws_data = _get_ws_data(ws)
+        if not ws_data.get("authenticated", False):
             continue
-            
-        user_id = getattr(ws, 'user_id', None)
+
+        user_id = ws_data.get("user_id")
         if not user_id:
             continue
-        
-        # Check if user is in this voice channel
+
         if user_id in participants:
             success = await send_to_client(ws, message)
             if not success:
                 disconnected.add(ws)
             else:
                 sent_count += 1
-    
-    # Clean up disconnected clients
+
     for ws in disconnected:
         connected_clients.discard(ws)
-    
+
     if disconnected:
         Logger.delete(f"Removed {len(disconnected)} disconnected clients from voice channel broadcast")
-    
+
     return disconnected
 
-async def broadcast_to_voice_channel_with_viewers(connected_clients, voice_channels, participant_message, viewer_message, channel_name):
+async def broadcast_to_voice_channel_with_viewers(connected_clients, voice_channels, participant_message, viewer_message, channel_name, server_data=None):
     """Broadcast to voice channel participants (with peer_id) AND to channel viewers (without peer_id)"""
     from db import channels
-    
+
     disconnected = set()
     sent_count = 0
-    
+
     participants = voice_channels.get(channel_name, {})
     if not participants:
         return disconnected
-    
+
     clients_copy = connected_clients.copy()
-    
+
     for ws in clients_copy:
-        if not getattr(ws, 'authenticated', False):
+        ws_data = _get_ws_data(ws)
+        if not ws_data.get("authenticated", False):
             continue
-            
-        user_id = getattr(ws, 'user_id', None)
+
+        user_id = ws_data.get("user_id")
         if not user_id:
             continue
-        
-        user_roles = getattr(ws, 'user_roles', None)
+
+        user_roles = ws_data.get("user_roles")
         if user_roles is None:
             from db import users
             user_data = users.get_user(user_id)
             if user_data:
                 user_roles = user_data.get("roles", [])
-                ws.user_roles = user_roles
+                ws_data["user_roles"] = user_roles
             else:
                 continue
-        
+
         if not channels.does_user_have_permission(channel_name, user_roles, "view"):
             continue
-        
+
         if user_id in participants:
             success = await send_to_client(ws, participant_message)
         else:
             success = await send_to_client(ws, viewer_message)
-        
+
         if not success:
             disconnected.add(ws)
         else:
             sent_count += 1
-    
+
     for ws in disconnected:
         connected_clients.discard(ws)
-    
+
     if disconnected:
         Logger.delete(f"Removed {len(disconnected)} disconnected clients from voice channel broadcast")
-    
+
     return disconnected

@@ -87,18 +87,20 @@ class PluginManager:
     
     def trigger_event(self, event: str, ws, message_data: Dict[str, Any], server_data: Optional[Dict[str, Any]] = None):
         """Trigger an event for all plugins that handle it"""
-        
+
         if event not in self.event_handlers:
             return
-        
+
         for handler_info in self.event_handlers[event]:
             try:
-                
+
                 # Check permissions if required
                 required_permissions = handler_info.get('required_permission', [])
                 if required_permissions:
                     from db import users
-                    user_roles = users.get_user_roles(getattr(ws, 'username', None))
+                    from handlers.websocket_utils import _get_ws_attr
+                    username = _get_ws_attr(ws, server_data, "username")
+                    user_roles = users.get_user_roles(username)
                     if not user_roles or not any(role in user_roles for role in required_permissions):
                         continue
                 

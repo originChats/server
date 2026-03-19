@@ -6,6 +6,7 @@ import json
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db import channels, users, roles
+from handlers.websocket_utils import broadcast_to_all, send_to_client, _get_ws_attr
 from logger import Logger
 
 
@@ -40,7 +41,7 @@ REQUIRED_PERMISSIONS = ["owner", "admin"]
 
 def has_permission(ws, message_data, server_data):
     """Check if user has required permissions"""
-    user_id = message_data.get('user_id', getattr(ws, 'user_id', None))
+    user_id = message_data.get('user_id', _get_ws_attr(ws, "user_id"))
     if not user_id:
         return False
     user_roles = users.get_user_roles(user_id)
@@ -225,7 +226,7 @@ def getInfo():
 
 def on_new_message(ws, message_data, server_data=None):
     """Handle new message events for auto-moderation"""
-    if not ws or not getattr(ws, 'authenticated', False):
+    if not ws or not _get_ws_attr(ws, "authenticated", False):
         return
     
     if not server_data or "rate_limiter" not in server_data:
