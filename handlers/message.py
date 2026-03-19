@@ -6,6 +6,7 @@ from handlers.messages.role import handle_role_create, handle_role_update, handl
 from handlers.messages.slash import handle_slash_register, handle_slash_list, handle_slash_call, handle_slash_response
 from handlers.messages.channel import handle_channels_get, handle_channel_create, handle_channel_update, handle_channel_move, handle_channel_delete
 from handlers.messages.rate_limit import handle_rate_limit_status, handle_rate_limit_reset
+from handlers.messages.status import handle_status_set, handle_status_get
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logger import Logger
 from config_store import get_config_value
@@ -1192,7 +1193,16 @@ async def handle(ws, message, server_data=None):
                     return error
 
                 users_list = users.get_users()
+                connected_usernames = server_data.get("connected_usernames", {})
+                for user in users_list:
+                    uname = user.get("username")
+                    if uname not in connected_usernames or connected_usernames.get(uname, 0) <= 0:
+                        user["status"] = {"status": "offline", "text": user.get("status", {}).get("text", "")}
                 return {"cmd": "users_list", "users": users_list}
+            case "status_set":
+                return await handle_status_set(ws, message, match_cmd, server_data)
+            case "status_get":
+                return handle_status_get(ws, message, match_cmd, server_data)
             case "users_online":
                 # Handle request for online users list
                 _, error = _require_user_id(ws)
@@ -1215,7 +1225,11 @@ async def handle(ws, message, server_data=None):
                     user_data = users.get_user(client_user_id)
                     if not user_data:
                         continue
-                    
+
+                    user_status = users.get_status(client_user_id)
+                    if user_status.get("status") == "invisible":
+                        continue
+
                     # Get the color of the first role
                     user_roles = user_data.get("roles", [])
                     color = None
@@ -1224,16 +1238,17 @@ async def handle(ws, message, server_data=None):
                         first_role_data = roles.get_role(first_role_name)
                         if first_role_data:
                             color = first_role_data.get("color")
-                    
+
                     # Use the username from user data (which supports username changes)
                     username = user_data.get("username", client_user_id)
                     online_users.append({
                         "username": username,
                         "nickname": user_data.get("nickname"),
                         "roles": user_data.get("roles"),
-                        "color": color
+                        "color": color,
+                        "status": user_status
                     })
-                
+
                 return {"cmd": "users_online", "users": online_users}
             case "plugins_list":
                 # Handle request for loaded plugins (admin only)

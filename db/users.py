@@ -124,6 +124,8 @@ def get_users():
                 if first_role_data:
                     color = first_role_data.get("color")
 
+            user_status = get_status(user_id)
+
             username = user_data.get("username", user_id)
             nickname = user_data.get("nickname")
             user_arr.append({
@@ -131,6 +133,7 @@ def get_users():
                 "nickname": nickname,
                 "roles": list(user_roles),
                 "color": color,
+                "status": user_status
             })
     return user_arr
 
@@ -424,4 +427,56 @@ def clear_nickname(user_id):
         if "nickname" in user:
             del user["nickname"]
             save_user(user_id, user)
+        return True
+
+
+ALLOWED_STATUSES = ["online", "idle", "dnd", "offline"]
+
+DEFAULT_STATUS = {
+    "status": "online",
+    "text": ""
+}
+
+def get_status(user_id) -> dict:
+    """
+    Get a user's status.
+
+    Args:
+        user_id (str): The ID of the user.
+
+    Returns:
+        str: The user's status, defaults to "online" if not set.
+    """
+    user = get_user(user_id)
+    if user:
+        return user.get("status", DEFAULT_STATUS)
+    return DEFAULT_STATUS
+
+def set_status(user_id, status, text=None):
+    """
+    Set a user's status.
+
+    Args:
+        user_id (str): The ID of the user.
+        status (str): The status to set. Must be one of: online, idle, dnd, offline.
+        text (str, optional): A custom status message (max 100 characters).
+
+    Returns:
+        bool: True if successful, False if user not found or invalid status.
+    """
+    if status not in ALLOWED_STATUSES:
+        return False
+
+    if text is not None and len(text) > 100:
+        return False
+
+    with _lock:
+        user = get_user(user_id)
+        if not user:
+            return False
+        user["status"] = {
+            "status": status,
+            "text": text[:100] if text else ""
+        }
+        save_user(user_id, user)
         return True

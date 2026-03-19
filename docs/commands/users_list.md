@@ -10,10 +10,28 @@
 ```json
 {
   "cmd": "users_list",
-  "users": [ ...array of user objects... ]
+  "users": [
+    {
+      "id": "user_id",
+      "username": "example_user",
+      "nickname": "Display Name",
+      "status": {
+        "status": "online",
+        "text": "Working on something cool"
+      },
+      "roles": ["role1", "role2"]
+    }
+  ]
 }
 ```
 - On error: see [common errors](errors.md).
+
+**User Object Fields:**
+- `id` - The user's unique identifier
+- `username` - The user's username
+- `nickname` - The user's display nickname (optional, may not be present)
+- `status` - Object containing `status` (online/idle/dnd/invisible) and `text` (custom message)
+- `roles` - Array of role names assigned to the user
 
 **Notes:**
 - User must be authenticated.

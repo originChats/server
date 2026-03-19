@@ -117,6 +117,8 @@ To add a new config value:
 |---------|-------------|---------------|
 | `users_list` | List all users | [View](commands/users_list.md) |
 | `users_online` | List online users | [View](commands/users_online.md) |
+| `status_set` | Set user status | [View](commands/status_set.md) |
+| `status_get` | Get user status | [View](commands/status_get.md) |
 | `users_banned_list` | List banned users (owner only) | [View](commands/users_banned_list.md) |
 | `user_ban` | Ban a user (owner only) | [View](commands/user_ban.md) |
 | `user_unban` | Unban a user (owner only) | [View](commands/user_unban.md) |
