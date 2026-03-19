@@ -1,4 +1,4 @@
-import asyncio, json, os, mimetypes, secrets
+import asyncio, json, os, mimetypes, secrets, uuid, time
 from urllib.parse import urlsplit, unquote
 from aiohttp import web
 import aiohttp
@@ -6,6 +6,7 @@ from handlers.websocket_utils import send_to_client, heartbeat, broadcast_to_all
 from handlers.auth import handle_authentication
 from handlers import message as message_handler
 from handlers.rate_limiter import RateLimiter
+from handlers import github_webhook
 from db import serverEmojis, push as push_db, webhooks as webhooks_db, channels, users, roles
 import watchers
 from plugin_manager import PluginManager
@@ -268,8 +269,8 @@ class OriginChatsServer:
                 text=json.dumps({"error": "Webhook token required"})
             ))
 
-        content_type = request.headers.get("Content-Type", "")
-        if not content_type.startswith("application/json"):
+        content_type_header = request.headers.get("Content-Type", "")
+        if not content_type_header.startswith("application/json"):
             return self._apply_cors(web.Response(
                 status=415,
                 content_type="application/json",
@@ -309,6 +310,35 @@ class OriginChatsServer:
                 text=json.dumps({"error": "Invalid JSON body"})
             ))
 
+        channel_name = webhook.get("channel") or ""
+        if not channels.channel_exists(channel_name):
+            return self._apply_cors(web.Response(
+                status=404,
+                content_type="application/json",
+                text=json.dumps({"error": "Channel not found"})
+            ))
+
+        github_event = request.headers.get("X-GitHub-Event", "")
+        if github_event and "repository" in data and "ref" in data:
+            msg_for_client, error = github_webhook.handle_github_webhook(data, github_event, channel_name)
+            if error:
+                return self._apply_cors(web.Response(
+                    status=400,
+                    content_type="application/json",
+                    text=json.dumps({"error": error})
+                ))
+
+            if msg_for_client:
+                await broadcast_to_channel_except(self.connected_clients, {
+                    "cmd": "message_new",
+                    "message": msg_for_client,
+                    "channel": channel_name,
+                    "global": True
+                }, channel_name, None)
+
+            Logger.info(f"[GitHub Webhook] {github_event} event received for channel {channel_name}")
+            return self._apply_cors(web.Response(status=204))
+
         content = data.get("content") or data.get("text") or ""
         username = data.get("username") or webhook.get("name") or "Webhook"
         avatar_url = data.get("avatar_url") or webhook.get("avatar")
@@ -324,15 +354,6 @@ class OriginChatsServer:
                 text=json.dumps({"error": "No content provided"})
             ))
 
-        channel_name = webhook.get("channel")
-        if not channels.channel_exists(channel_name):
-            return self._apply_cors(web.Response(
-                status=404,
-                content_type="application/json",
-                text=json.dumps({"error": "Channel not found"})
-            ))
-
-        import uuid, time
         message_id = str(uuid.uuid4())
         out_msg = {
             "user": "originChats",
