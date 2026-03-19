@@ -35,7 +35,7 @@ def handle_role_create(ws, message, match_cmd, server_data):
             "color": message.get("color")
         }, server_data)
 
-    return {"cmd": "role_create", "name": role_name, "created": created}
+    return {"cmd": "role_create", "name": role_name, "created": created, "roles": roles.get_all_roles()}
 
 
 def handle_role_update(ws, message, match_cmd, server_data):
@@ -74,7 +74,37 @@ def handle_role_update(ws, message, match_cmd, server_data):
             "color": role_data.get("color")
         }, server_data)
 
-    return {"cmd": "role_update", "name": role_name, "updated": updated}
+    return {"cmd": "role_update", "name": role_name, "updated": updated, "roles": roles.get_all_roles()}
+
+
+def handle_role_set(ws, message, match_cmd, server_data):
+    user_id, error = _require_user_id(ws, "Authentication required")
+    if error:
+        return error
+    _, error = _require_user_roles(user_id, requiredRoles=["owner"])
+    if error:
+        return error
+
+    role_name = message.get("name")
+    if not role_name:
+        return _error("Role name is required", match_cmd)
+
+    role_data = message.get("data")
+    if not role_data or not isinstance(role_data, dict):
+        return _error("Role data is required", match_cmd)
+
+    if not roles.role_exists(role_name):
+        return _error("Role not found", match_cmd)
+
+    updated = roles.update_role(role_name, role_data)
+    if server_data:
+        server_data["plugin_manager"].trigger_event("role_update", ws, {
+            "role_name": role_name,
+            "description": role_data.get("description", ""),
+            "color": role_data.get("color")
+        }, server_data)
+
+    return {"cmd": "role_set", "name": role_name, "updated": updated, "roles": roles.get_all_roles()}
 
 
 def handle_role_delete(ws, message, match_cmd, server_data):

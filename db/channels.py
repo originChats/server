@@ -5,7 +5,7 @@ import threading
 from typing import Dict, List, Optional
 from . import users
 from . import threads
-import emoji
+from .emoji_utils import is_valid_emoji
 
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 channels_db_dir = os.path.join(_MODULE_DIR, "channels")
@@ -1036,7 +1036,7 @@ def add_reaction(channel_name, message_id, emoji_str, user_id):
         if idx is None:
             return False
 
-        if not emoji.is_emoji(emoji_str):
+        if not is_valid_emoji(emoji_str):
             return False
 
         old_msg = cache["messages"][idx]
@@ -1082,7 +1082,7 @@ def remove_reaction(channel_name, message_id, emoji_str, user_id):
         if idx is None:
             return False
 
-        if not emoji.is_emoji(emoji_str):
+        if not is_valid_emoji(emoji_str):
             return False
 
         old_msg = cache["messages"][idx]

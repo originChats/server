@@ -5,7 +5,7 @@ import threading
 import uuid
 from typing import Dict, List, Optional
 from . import users
-import emoji
+from .emoji_utils import is_valid_emoji
 
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 threads_db_dir = os.path.join(_MODULE_DIR, "threads")
@@ -471,7 +471,7 @@ def add_thread_reaction(thread_id, message_id, emoji_str, user_id):
         if idx is None:
             return False
 
-        if not emoji.is_emoji(emoji_str):
+        if not is_valid_emoji(emoji_str):
             return False
 
         old_msg = cache["messages"][idx]
@@ -508,7 +508,7 @@ def remove_thread_reaction(thread_id, message_id, emoji_str, user_id):
         if idx is None:
             return False
 
-        if not emoji.is_emoji(emoji_str):
+        if not is_valid_emoji(emoji_str):
             return False
 
         old_msg = cache["messages"][idx]

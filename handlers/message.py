@@ -2,7 +2,7 @@ from db import channels, users, roles, serverEmojis, threads
 import time, uuid, sys, os, asyncio, json, re
 from handlers.messages.webhook import handle_webhook_create, handle_webhook_get, handle_webhook_list, handle_webhook_delete, handle_webhook_update, handle_webhook_regenerate
 from handlers.messages.emoji import handle_emoji_add, handle_emoji_delete, handle_emoji_get_all, handle_emoji_update, handle_emoji_get_filename, handle_emoji_get_id
-from handlers.messages.role import handle_role_create, handle_role_update, handle_role_delete, handle_roles_list, handle_role_permissions_set, handle_role_permissions_get
+from handlers.messages.role import handle_role_create, handle_role_update, handle_role_delete, handle_roles_list, handle_role_permissions_set, handle_role_permissions_get, handle_role_set
 from handlers.messages.slash import handle_slash_register, handle_slash_list, handle_slash_call, handle_slash_response
 from handlers.messages.channel import handle_channels_get, handle_channel_create, handle_channel_update, handle_channel_move, handle_channel_delete
 from handlers.messages.rate_limit import handle_rate_limit_status, handle_rate_limit_reset
@@ -1447,6 +1447,8 @@ async def handle(ws, message, server_data=None):
                 return handle_role_create(ws, message, match_cmd, server_data)
             case "role_update":
                 return handle_role_update(ws, message, match_cmd, server_data)
+            case "role_set":
+                return handle_role_set(ws, message, match_cmd, server_data)
             case "role_delete":
                 return handle_role_delete(ws, message, match_cmd, server_data)
             case "role_permissions_set":
@@ -1488,6 +1490,13 @@ async def handle(ws, message, server_data=None):
                 users.set_user_roles(target_id, roles_to_set)
                 updated_user = users.get_user(target_id)
                 username = users.get_username_by_id(target_id)
+
+                color = None
+                if roles_to_set:
+                    first_role_data = roles.get_role(roles_to_set[0])
+                    if first_role_data:
+                        color = first_role_data.get("color")
+
                 if server_data:
                     server_data["plugin_manager"].trigger_event("user_roles_set", ws, {
                         "user_id": target_id,
@@ -1497,7 +1506,7 @@ async def handle(ws, message, server_data=None):
 
                 if not updated_user:
                     return _error("User not found", match_cmd)
-                return {"cmd": "user_roles_set", "user": username, "roles": updated_user.get("roles", []), "set": True}
+                return {"cmd": "user_roles_set", "user": username, "roles": updated_user.get("roles", []), "color": color, "set": True}
             case "user_roles_get":
                 user_id, error = _require_user_id(ws, "Authentication required")
                 if error:
