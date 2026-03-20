@@ -69,7 +69,6 @@ def handle_github_webhook(payload: dict, event_type: str, channel_name: str):
             "content": "",
             "timestamp": time.time(),
             "type": "message",
-            "pinned": False,
             "id": message_id,
             "webhook": {
                 "id": "github",

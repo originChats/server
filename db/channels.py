@@ -389,6 +389,8 @@ def convert_messages_to_user_format(messages):
                 converted_reactions[emo] = [uid_to_name.get(u) or u for u in uid_list]
             msg_copy["reactions"] = converted_reactions
 
+        msg_copy.setdefault("pinned", False)
+
         converted.append(msg_copy)
 
     return converted
@@ -766,7 +768,7 @@ def unpin_channel_message(channel_name, message_id):
 
         old_msg = cache["messages"][idx]
         msg = copy.deepcopy(old_msg)
-        msg["pinned"] = False
+        del msg["pinned"]
 
         new_serialised = json.dumps(msg, separators=(',', ':'), ensure_ascii=False)
         if _patch_line_in_place(channel_name, idx, new_serialised):

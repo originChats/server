@@ -99,7 +99,6 @@ async def on_user_join(ws, message_data, server_data=None):
             "content": welcome_content,
             "timestamp": time.time(),
             "type": "message",
-            "pinned": False,
             "id": str(uuid.uuid4())
         }
 

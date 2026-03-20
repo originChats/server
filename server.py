@@ -360,7 +360,6 @@ class OriginChatsServer:
             "content": content,
             "timestamp": time.time(),
             "type": "message",
-            "pinned": False,
             "id": message_id,
             "webhook": {
                 "id": webhook.get("id"),

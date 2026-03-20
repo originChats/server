@@ -435,7 +435,6 @@ def send_message_to_channel(channel, content, server_data):
         "content": content.strip(),
         "timestamp": time.time(),
         "type": "message",
-        "pinned": False,
         "id": str(uuid.uuid4())
     }
     

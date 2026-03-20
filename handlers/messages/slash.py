@@ -164,7 +164,6 @@ async def handle_slash_call(ws, message, match_cmd, server_data):
                     "content": response_text,
                     "timestamp": time.time(),
                     "type": "message",
-                    "pinned": False,
                     "id": str(uuid.uuid4()),
                     "interaction": {
                         "command": cmd_name,
@@ -311,7 +310,6 @@ def handle_slash_response(ws, message, match_cmd, server_data):
         "content": response or "",
         "timestamp": time.time(),
         "type": "message",
-        "pinned": False,
         "id": str(uuid.uuid4()),
         "interaction": {
             "command": command,

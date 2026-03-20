@@ -356,7 +356,6 @@ def send_mod_message(channel, content, server_data):
         "content": content,
         "timestamp": time.time(),
         "type": "message",
-        "pinned": False,
         "id": str(uuid.uuid4())
     }
     

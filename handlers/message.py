@@ -461,7 +461,6 @@ async def handle(ws, message, server_data=None):
                     "content": content,
                     "timestamp": time.time(),
                     "type": "message",
-                    "pinned": False,
                     "id": str(uuid.uuid4())
                 }
 

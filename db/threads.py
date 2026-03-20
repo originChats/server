@@ -390,6 +390,8 @@ def convert_messages_to_user_format(messages: List[dict]) -> List[dict]:
                 converted_reactions[emo] = [uid_to_name.get(u) or u for u in uid_list]
             msg_copy["reactions"] = converted_reactions
 
+        msg_copy.setdefault("pinned", False)
+
         converted.append(msg_copy)
 
     return converted
