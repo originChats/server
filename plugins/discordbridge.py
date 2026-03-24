@@ -13,6 +13,8 @@ from db import channels
 import asyncio
 from logger import Logger
 import time
+from handlers.websocket_utils import broadcast_to_all
+from db import channels, users
 
 sharedchannels= []
 originwebhooks = []
@@ -78,14 +80,13 @@ async def on_message(message):
     if message.channel.name in sharedchannels:
         channels.save_channel_message(message.channel.name, sendmessage)
         Logger.info(f"Message received in shared channel '{message.channel.name}': {message.content}")
+
         sendmessage = {
         "user": "originChats",
-        "content": message.author.username + ": " + message.content,
+        "content": message.author.name + ": " + message.content,
         "timestamp": time.time(),
         "id": str(uuid.uuid4())
     }
-        
-        
 
 async def start_bot():
     await bot.start(DISCORD_BOT_TOKEN)
