@@ -80,7 +80,7 @@ async def on_message(message):
         Logger.info(f"Message received in shared channel '{message.channel.name}': {message.content}")
         sendmessage = {
         "user": "originChats",
-        "content": message.author.name + ": " + message.content,
+        "content": message.author.username + ": " + message.content,
         "timestamp": time.time(),
         "id": str(uuid.uuid4())
     }
