@@ -12,3 +12,5 @@ DISCORD_BOT_TOKEN = MTAyMzQ1Njc4OTAxMjM0NTY3OA.GBgHhJ.FakeTokenExample1234567890
 DISCORD_GUILD_ID = 12438329893
 ```
 Next, simply make sure everything is in the plugins folder, and run it!
+[!NOTE]
+> Any correlation to real tokens or guild IDS is coincidental.
