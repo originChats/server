@@ -12,6 +12,14 @@ import asyncio
 import time
 from pathlib import Path
 import gc
+from discord.utils import get
+
+def getInfo():
+    return {
+        "name": "DiscordBridge Plugin",
+        "description": "Sends messages to/from Discord.",
+        "handles": ["new_message"]
+    }
 
 from dotenv import load_dotenv
 
@@ -43,7 +51,6 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 directory_path = os.path.join(".", "db", "channels")
-
 
 def channelsinit():
     global originchannels
@@ -138,13 +145,33 @@ async def start_bot():
     await bot.start(DISCORD_BOT_TOKEN)
 
 
+async def on_new_message(ws, message_data, server_data=None):
+        if not ws or not _get_ws_attr(ws, "authenticated", False):
+        return
+    
+    if not server_data or "rate_limiter" not in server_data:
+        return
+    channel = get(guild.text_channels, name='general')
+    user_id = message_data.get('user_id')
+    username = message_data.get('username')
+    content = message_data.get('content', '')
+    channel = message_data.get('channel')
+    message_obj = message_data.get('message', {})
+    message_id = message_obj.get('id')
+    channel = get(guild.text_channels, name=channel)
+    if channel:
+        await channel.send(username + ": " + content)
+    
+
+
 def init():
     try:
         loop = asyncio.get_running_loop()
         loop.create_task(start_bot())
+        loop.create_task(on_new_message())
     except RuntimeError:
         loop = asyncio.get_event_loop()
         loop.create_task(start_bot())
-
+        loop.create_task(on_new_message())
 
 init()
