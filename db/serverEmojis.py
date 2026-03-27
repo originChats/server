@@ -22,13 +22,13 @@ _emoji_lock = threading.RLock()
 
 
 def get_allowed_file_types() -> list[str]:
-    configured_types = get_config_value("uploads", "emoji_allowed_file_types", default=["gif", "jpg", "jpeg"])
+    configured_types = get_config_value("uploads", "emoji_allowed_file_types", default=["gif", "jpg", "jpeg", "png"])
     normalized_types = []
     for file_type in configured_types:
         normalized = _normalize_extension(file_type)
         if normalized and normalized not in normalized_types:
             normalized_types.append(normalized)
-    return normalized_types or ["gif", "jpg", "jpeg"]
+    return normalized_types or ["gif", "jpg", "jpeg", "png"]
 
 def _ensure_storage() -> None:
     os.makedirs(server_emojis_db, exist_ok=True)
