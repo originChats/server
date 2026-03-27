@@ -9,6 +9,7 @@ from handlers.messages.slash import handle_slash_register, handle_slash_list, ha
 from handlers.messages.channel import handle_channels_get, handle_channel_create, handle_channel_update, handle_channel_move, handle_channel_delete
 from handlers.messages.rate_limit import handle_rate_limit_status, handle_rate_limit_reset
 from handlers.messages.status import handle_status_set, handle_status_get
+from handlers.messages.reaction import handle_react_add, handle_react_remove
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logger import Logger
 from config_store import get_config_value
@@ -912,93 +913,9 @@ async def handle(ws, message, server_data: dict):
                 search_results = channels.convert_messages_to_user_format(search_results)
                 return {"cmd": "messages_search", "channel": channel_name, "query": query, "results": search_results}
             case "message_react_add":
-                user_id, error = _require_user_id(ws, "Authentication required")
-                if error:
-                    return error
-
-                user_roles, error = _require_user_roles(user_id)
-                if error:
-                    return error
-
-                channel_name = message.get("channel")
-                thread_id = message.get("thread_id")
-                message_id = message.get("id")
-                emoji_str = message.get("emoji")
-
-                if not message_id or not emoji_str:
-                    return _error("Message ID and emoji are required", match_cmd)
-
-                ctx, err = _get_channel_or_thread_context(channel_name, thread_id, user_id, user_roles)
-                if err:
-                    msg, key = err
-                    return _error(msg, match_cmd)
-                
-                if not ctx:
-                    return _error("Message not found", match_cmd)
-                
-                is_thread = ctx["is_thread"]
-                parent_channel = ctx.get("parent_channel") or ctx.get("channel")
-                
-                if not channels.can_user_react(parent_channel, user_roles):
-                    return _error(f"You do not have permission to add reactions to this message", match_cmd)
-                
-                if is_thread and thread_id:
-                    msg_obj = threads.get_thread_message(thread_id, message_id)
-                    if not msg_obj:
-                        return _error("Message not found", match_cmd)
-                    if not threads.add_thread_reaction(thread_id, message_id, emoji_str, user_id):
-                        return _error("Failed to add reaction", match_cmd)
-                    username = users.get_username_by_id(user_id)
-                    return {"cmd": "message_react_add", "id": message_id, "emoji": emoji_str, "channel": parent_channel, "thread_id": thread_id, "from": username, "global": True}
-                else:
-                    if not channels.add_reaction(channel_name, message_id, emoji_str, user_id):
-                        return _error("Failed to add reaction", match_cmd)
-                    username = users.get_username_by_id(user_id)
-                    return {"cmd": "message_react_add", "id": message_id, "emoji": emoji_str, "channel": channel_name, "from": username, "global": True}
+                return await handle_react_add(ws, message, match_cmd, _get_channel_or_thread_context)
             case "message_react_remove":
-                user_id, error = _require_user_id(ws, "Authentication required")
-                if error:
-                    return error
-
-                channel_name = message.get("channel")
-                thread_id = message.get("thread_id")
-                message_id = message.get("id")
-                emoji_str = message.get("emoji")
-
-                if not message_id or not emoji_str:
-                    return _error("Message ID and emoji are required", match_cmd)
-
-                user_roles, error = _require_user_roles(user_id)
-                if error:
-                    return error
-
-                ctx, err = _get_channel_or_thread_context(channel_name, thread_id, user_id, user_roles)
-                if err:
-                    msg, key = err
-                    return _error(msg, match_cmd)
-                
-                if not ctx:
-                    return _error("Message not found", match_cmd)
-
-                is_thread = ctx["is_thread"]
-                parent_channel = ctx.get("parent_channel") or ctx.get("channel")
-                
-                if not channels.can_user_react(parent_channel, user_roles):
-                    return _error("You do not have permission to remove reactions from this message", match_cmd)
-                
-                if is_thread and thread_id:
-                    msg_obj = threads.get_thread_message(thread_id, message_id)
-                    if not msg_obj:
-                        return _error("Message not found", match_cmd)
-                    if not threads.remove_thread_reaction(thread_id, message_id, emoji_str, user_id):
-                        return _error("Failed to remove reaction", match_cmd)
-                    username = users.get_username_by_id(user_id)
-                    return {"cmd": "message_react_remove", "id": message_id, "emoji": emoji_str, "channel": parent_channel, "thread_id": thread_id, "from": username, "global": True}
-                else:
-                    if not channels.remove_reaction(channel_name, message_id, emoji_str, user_id):
-                        return _error("Failed to remove reaction", match_cmd)
-                    username = users.get_username_by_id(user_id)
-                    return {"cmd": "message_react_remove", "id": message_id, "emoji": emoji_str, "channel": channel_name, "from": username, "global": True}
+                return await handle_react_remove(ws, message, match_cmd, _get_channel_or_thread_context)
             case "messages_get":
                 channel_name = message.get("channel")
                 thread_id = message.get("thread_id")

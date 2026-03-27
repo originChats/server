@@ -36,7 +36,29 @@ DEFAULT_CHANNELS = [
     }
 ]
 
-_lock = threading.RLock()
+_global_lock = threading.RLock()
+_channel_locks: Dict[str, threading.RLock] = {}
+_permission_cache: Dict[str, dict] = {}
+_permission_cache_valid: bool = False
+
+def _get_channel_lock(channel_name: str) -> threading.RLock:
+    if channel_name not in _channel_locks:
+        with _global_lock:
+            if channel_name not in _channel_locks:
+                _channel_locks[channel_name] = threading.RLock()
+    return _channel_locks[channel_name]
+
+def _invalidate_permission_cache():
+    global _permission_cache_valid
+    _permission_cache_valid = False
+
+def _get_channel_permissions_cached(channel_name: str) -> Optional[dict]:
+    global _permission_cache, _permission_cache_valid
+    if not _permission_cache_valid:
+        with _global_lock:
+            _permission_cache = {ch["name"]: ch.get("permissions", {}) for ch in _get_channels_cache() if ch.get("name")}
+            _permission_cache_valid = True
+    return _permission_cache.get(channel_name)
 
 _channels_cache: List[dict] = []
 _channels_loaded: bool = False
@@ -60,9 +82,10 @@ def _save_channels_index(channels: List[dict]) -> None:
         json.dump(channels, f, indent=4)
         f.flush()
         os.fsync(f.fileno())
-    os.replace(tmp, channels_index)
+        os.replace(tmp, channels_index)
     _channels_cache = channels
     _channels_loaded = True
+    _invalidate_permission_cache()
 
 
 def _get_channels_cache() -> List[dict]:
@@ -246,7 +269,7 @@ def _read_channel_file(channel_name):
 
 
 def _write_channel_file(channel_name, messages):
-    with _lock:
+    with _get_channel_lock(channel_name):
         cache = _get_channel_cache(channel_name)
         old_messages = cache["messages"]
         old_id_to_idx = cache["id_to_idx"]
@@ -295,7 +318,7 @@ def get_channel(channel_name):
     """
     Get channel data by channel name.
     """
-    with _lock:
+    with _global_lock:
         for channel in _get_channels_cache():
             if channel.get("name") == channel_name:
                 return copy.deepcopy(channel)
@@ -316,7 +339,7 @@ def get_channel_messages(channel_name, start, limit):
     Returns:
         list: A list of messages from the specified channel, in chronological order (oldest first).
     """
-    with _lock:
+    with _get_channel_lock(channel_name):
         cache = _get_channel_cache(channel_name)
         channel_data = cache["messages"]
 
@@ -412,7 +435,7 @@ def save_channel_message(channel_name, message):
     channel_file = os.path.join(channels_db_dir, channel_name + ".json")
     os.makedirs(channels_db_dir, exist_ok=True)
 
-    with _lock:
+    with _get_channel_lock(channel_name):
         cache = _get_channel_cache(channel_name)
         messages = cache["messages"]
 
@@ -483,7 +506,7 @@ def get_all_channels_for_roles(roles):
     Returns:
         list: A list of channel info dicts available for the specified roles.
     """
-    with _lock:
+    with _global_lock:
         result = []
         for channel in _get_channels_cache():
             permissions = channel.get("permissions", {})
@@ -524,7 +547,7 @@ def edit_channel_message(channel_name, message_id, new_content, embeds=None):
     Returns:
         bool: True if the message was edited successfully, False otherwise.
     """
-    with _lock:
+    with _get_channel_lock(channel_name):
         cache = _get_channel_cache(channel_name)
         id_to_idx = cache["id_to_idx"]
 
@@ -565,7 +588,7 @@ def get_channel_message(channel_name, message_id):
     Returns:
         dict: The message if found, None otherwise.
     """
-    with _lock:
+    with _get_channel_lock(channel_name):
         cache = _get_channel_cache(channel_name)
         idx = cache["id_to_idx"].get(message_id)
         if idx is None:
@@ -589,15 +612,13 @@ def does_user_have_permission(channel_name, user_roles, permission_type):
     """
     if "owner" in user_roles:
         return True
-    with _lock:
-        for channel in _get_channels_cache():
-            if channel.get("name") == channel_name:
-                permissions = channel.get("permissions", {})
-                allowed_roles = permissions.get(permission_type)
-                if allowed_roles is None or allowed_roles == []:
-                    allowed_roles = DEFAULT_PERMISSIONS.get(permission_type, [])
-                return any(role in allowed_roles for role in user_roles)
+    permissions = _get_channel_permissions_cached(channel_name)
+    if permissions is None:
         return False
+    allowed_roles = permissions.get(permission_type)
+    if allowed_roles is None or allowed_roles == []:
+        allowed_roles = DEFAULT_PERMISSIONS.get(permission_type, [])
+    return any(role in allowed_roles for role in user_roles)
 
 
 def delete_channel_message(channel_name, message_id):
@@ -611,7 +632,7 @@ def delete_channel_message(channel_name, message_id):
     Returns:
         bool: True if the message was deleted successfully, False otherwise.
     """
-    with _lock:
+    with _get_channel_lock(channel_name):
         cache = _get_channel_cache(channel_name)
 
         if message_id not in cache["id_to_idx"]:
@@ -640,7 +661,7 @@ def get_channels():
     Returns:
         list: A list of channel info dicts.
     """
-    with _lock:
+    with _global_lock:
         return copy.deepcopy(_get_channels_cache())
 
 
@@ -659,7 +680,7 @@ def create_channel(channel_name, channel_type, description=None, wallpaper=None,
     Returns:
         bool: True if the channel was created successfully, False if it already exists.
     """
-    with _lock:
+    with _global_lock:
         channels = copy.deepcopy(_get_channels_cache())
 
         if any(channel.get('name') == channel_name for channel in channels):
@@ -704,7 +725,7 @@ def can_user_pin(channel_name, user_roles):
     Check if a user with specific roles can pin messages in a channel.
     If the channel does not specify pin, only owner is allowed by default
     """
-    with _lock:
+    with _global_lock:
         for channel in _get_channels_cache():
             if channel.get("name") == channel_name:
                 permissions = channel.get("permissions", {})
@@ -726,7 +747,7 @@ def pin_channel_message(channel_name, message_id):
     Returns:
         bool: True if the message was pinned successfully, False otherwise.
     """
-    with _lock:
+    with _get_channel_lock(channel_name):
         cache = _get_channel_cache(channel_name)
         idx = cache["id_to_idx"].get(message_id)
         if idx is None:
@@ -761,7 +782,7 @@ def unpin_channel_message(channel_name, message_id):
     Returns:
         bool: True if the message was unpinned successfully, False otherwise.
     """
-    with _lock:
+    with _get_channel_lock(channel_name):
         cache = _get_channel_cache(channel_name)
         idx = cache["id_to_idx"].get(message_id)
         if idx is None:
@@ -795,7 +816,7 @@ def get_pinned_messages(channel_name):
     Returns:
         list: A list of all pinned messages in a channel
     """
-    with _lock:
+    with _get_channel_lock(channel_name):
         messages = _get_channel_cache(channel_name)["messages"]
         pinned = [copy.deepcopy(msg) for msg in messages if msg.get("pinned")]
     return list(reversed(pinned))
@@ -812,7 +833,7 @@ def search_channel_messages(channel_name, query):
     Returns:
         list: A list of messages that match the search query.
     """
-    with _lock:
+    with _get_channel_lock(channel_name):
         messages = _get_channel_cache(channel_name)["messages"]
         results = [copy.deepcopy(msg) for msg in messages if query in msg.get("content", "").lower()]
     return list(reversed(results))
@@ -828,7 +849,7 @@ def delete_channel(channel_name):
     Returns:
         bool: True if the channel was deleted successfully, False if it does not exist.
     """
-    with _lock:
+    with _global_lock:
         channels = copy.deepcopy(_get_channels_cache())
         new_channels = [ch for ch in channels if ch.get('name') != channel_name]
 
@@ -859,7 +880,7 @@ def set_channel_permissions(channel_name, role, permission, allow=True):
     Returns:
         bool: True if permissions were set successfully, False if the channel does not exist.
     """
-    with _lock:
+    with _global_lock:
         channels = copy.deepcopy(_get_channels_cache())
 
         for channel in channels:
@@ -889,7 +910,7 @@ def get_channel_permissions(channel_name):
     Returns:
         dict: A dictionary of permissions for the channel, or None if the channel does not exist.
     """
-    with _lock:
+    with _global_lock:
         for channel in _get_channels_cache():
             if channel.get("name") == channel_name:
                 return copy.deepcopy(channel.get("permissions", {}))
@@ -907,7 +928,7 @@ def reorder_channel(channel_name, new_position):
     Returns:
         bool: True if the channel was reordered successfully, False if it does not exist.
     """
-    with _lock:
+    with _global_lock:
         channels = copy.deepcopy(_get_channels_cache())
 
         for i, channel in enumerate(channels):
@@ -932,7 +953,7 @@ def get_message_replies(channel_name, message_id, limit=50):
     Returns:
         list: A list of messages that are replies to the specified message.
     """
-    with _lock:
+    with _get_channel_lock(channel_name):
         messages = _get_channel_cache(channel_name)["messages"]
         replies = []
         for msg in messages:
@@ -953,7 +974,7 @@ def purge_messages(channel_name, count):
     Returns:
         bool: True if messages were purged successfully, False if the channel does not exist or has fewer messages.
     """
-    with _lock:
+    with _get_channel_lock(channel_name):
         cache = _get_channel_cache(channel_name)
         messages = cache["messages"]
 
@@ -980,7 +1001,7 @@ def can_user_delete_own(channel_name, user_roles):
     Check if a user with specific roles can delete their own message in a channel.
     If the channel does not specify delete_own, all roles are allowed by default.
     """
-    with _lock:
+    with _global_lock:
         for channel in _get_channels_cache():
             if channel.get("name") == channel_name:
                 permissions = channel.get("permissions", {})
@@ -996,7 +1017,7 @@ def can_user_edit_own(channel_name, user_roles):
     Check if a user with specific roles can edit their own message in a channel.
     If the channel does not specify edit_own, all roles are allowed by default.
     """
-    with _lock:
+    with _global_lock:
         for channel in _get_channels_cache():
             if channel.get("name") == channel_name:
                 permissions = channel.get("permissions", {})
@@ -1011,7 +1032,7 @@ def can_user_react(channel_name, user_roles):
     Check if a user with specific roles can react to messages in a channel.
     If the channel does not specify react, all roles are allowed by default.
     """
-    with _lock:
+    with _global_lock:
         for channel in _get_channels_cache():
             if channel.get("name") == channel_name:
                 permissions = channel.get("permissions", {})
@@ -1034,7 +1055,7 @@ def add_reaction(channel_name, message_id, emoji_str, user_id):
     Returns:
         bool: True if the reaction was added successfully, False otherwise.
     """
-    with _lock:
+    with _get_channel_lock(channel_name):
         cache = _get_channel_cache(channel_name)
         idx = cache["id_to_idx"].get(message_id)
         if idx is None:
@@ -1080,7 +1101,7 @@ def remove_reaction(channel_name, message_id, emoji_str, user_id):
     Returns:
         bool: True if the reaction was removed successfully, False otherwise.
     """
-    with _lock:
+    with _get_channel_lock(channel_name):
         cache = _get_channel_cache(channel_name)
         idx = cache["id_to_idx"].get(message_id)
         if idx is None:
@@ -1128,7 +1149,7 @@ def get_reactions(channel_name, message_id):
     Returns:
         dict: A dictionary containing the reactions for the message, or None if the message or channel does not exist.
     """
-    with _lock:
+    with _get_channel_lock(channel_name):
         cache = _get_channel_cache(channel_name)
         idx = cache["id_to_idx"].get(message_id)
         if idx is None:
@@ -1148,7 +1169,7 @@ def get_reaction_users(channel_name, message_id, emoji_str):
     Returns:
         list: A list of usernames who reacted with the specified emoji, or None if the message or channel does not exist.
     """
-    with _lock:
+    with _get_channel_lock(channel_name):
         cache = _get_channel_cache(channel_name)
         idx = cache["id_to_idx"].get(message_id)
         if idx is None:
@@ -1170,7 +1191,7 @@ def channel_exists(channel_name):
     Returns:
         bool: True if the channel exists, False otherwise.
     """
-    with _lock:
+    with _global_lock:
         return any(ch.get('name') == channel_name for ch in _get_channels_cache())
 
 
@@ -1191,7 +1212,7 @@ def update_channel(channel_name, updates):
     Returns:
         bool: True if the channel was updated successfully, False if it does not exist.
     """
-    with _lock:
+    with _global_lock:
         channels = copy.deepcopy(_get_channels_cache())
 
     for channel in channels:
