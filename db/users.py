@@ -29,6 +29,11 @@ def _load_users() -> Dict[str, dict]:
     _users_loaded = True
     return _users_cache
 
+def reload_users() -> Dict[str, dict]:
+    global _users_loaded
+    _users_loaded = False
+    return _load_users()
+
 def _save_users(users_dict: Dict[str, dict]) -> None:
     global _users_cache, _users_loaded
     tmp = users_index + ".tmp"

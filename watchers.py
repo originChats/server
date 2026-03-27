@@ -69,6 +69,7 @@ class FileWatcher(FileSystemEventHandler):
     
     async def _handle_users_change(self):
         try:
+            users.reload_users()
             await self.broadcast_func({
                 "cmd": "users_list",
                 "users": users.get_users()
