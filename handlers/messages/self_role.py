@@ -1,8 +1,9 @@
 from db import roles, users
 from handlers.messages.helpers import _error, _require_user_id
+from handlers.websocket_utils import broadcast_to_all
 
 
-def handle_self_role_add(ws, message, match_cmd, server_data):
+async def handle_self_role_add(ws, message, match_cmd, server_data):
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
@@ -26,22 +27,36 @@ def handle_self_role_add(ws, message, match_cmd, server_data):
         return _error("Failed to assign role", match_cmd)
 
     username = users.get_username_by_id(user_id)
+    updated_roles = users.get_user_roles(user_id)
+    
+    color = None
+    if updated_roles:
+        first_role_data = roles.get_role(updated_roles[0])
+        if first_role_data:
+            color = first_role_data.get("color")
+
     if server_data:
         server_data["plugin_manager"].trigger_event("self_role_add", ws, {
             "user_id": user_id,
             "username": username,
             "role_name": role_name
         }, server_data)
+        await broadcast_to_all(server_data["connected_clients"], {
+            "cmd": "user_roles_get",
+            "user": username,
+            "roles": updated_roles,
+            "color": color
+        }, server_data)
 
     return {
         "cmd": "self_role_add",
         "role": role_name,
         "success": True,
-        "roles": users.get_user_roles(user_id)
+        "roles": updated_roles
     }
 
 
-def handle_self_role_remove(ws, message, match_cmd, server_data):
+async def handle_self_role_remove(ws, message, match_cmd, server_data):
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
@@ -65,18 +80,32 @@ def handle_self_role_remove(ws, message, match_cmd, server_data):
         return _error("Failed to remove role", match_cmd)
 
     username = users.get_username_by_id(user_id)
+    updated_roles = users.get_user_roles(user_id)
+    
+    color = None
+    if updated_roles:
+        first_role_data = roles.get_role(updated_roles[0])
+        if first_role_data:
+            color = first_role_data.get("color")
+
     if server_data:
         server_data["plugin_manager"].trigger_event("self_role_remove", ws, {
             "user_id": user_id,
             "username": username,
             "role_name": role_name
         }, server_data)
+        await broadcast_to_all(server_data["connected_clients"], {
+            "cmd": "user_roles_get",
+            "user": username,
+            "roles": updated_roles,
+            "color": color
+        }, server_data)
 
     return {
         "cmd": "self_role_remove",
         "role": role_name,
         "success": True,
-        "roles": users.get_user_roles(user_id)
+        "roles": updated_roles
     }
 
 

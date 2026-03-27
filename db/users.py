@@ -199,7 +199,7 @@ def give_role(user_id, role):
     with _lock:
         user = get_user(user_id)
         if user:
-            user["roles"].insert(0, role)
+            user["roles"].append(role)
             save_user(user_id, user)
             return True
         return False

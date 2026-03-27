@@ -1431,9 +1431,9 @@ async def handle(ws, message, server_data: dict):
             case "role_permissions_get":
                 return handle_role_permissions_get(ws, message, match_cmd)
             case "self_role_add":
-                return handle_self_role_add(ws, message, match_cmd, server_data)
+                return await handle_self_role_add(ws, message, match_cmd, server_data)
             case "self_role_remove":
-                return handle_self_role_remove(ws, message, match_cmd, server_data)
+                return await handle_self_role_remove(ws, message, match_cmd, server_data)
             case "self_roles_list":
                 return handle_self_roles_list(ws, message, match_cmd)
             case "channel_create":
