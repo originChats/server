@@ -40,6 +40,11 @@ def _load_roles() -> dict:
     _roles_loaded = True
     return _roles_cache
 
+def reload_roles() -> dict:
+    global _roles_loaded
+    _roles_loaded = False
+    return _load_roles()
+
 def _save_roles(roles_dict: dict) -> None:
     global _roles_cache, _roles_loaded
     tmp = roles_index + ".tmp"

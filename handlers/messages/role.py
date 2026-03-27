@@ -1,8 +1,9 @@
 from db import roles, users, channels
 from handlers.messages.helpers import _error, _require_user_id, _require_user_roles
+from handlers.websocket_utils import broadcast_to_all
 
 
-def handle_role_create(ws, message, match_cmd, server_data):
+async def handle_role_create(ws, message, match_cmd, server_data):
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
@@ -39,10 +40,15 @@ def handle_role_create(ws, message, match_cmd, server_data):
             "color": message.get("color")
         }, server_data)
 
-    return {"cmd": "role_create", "name": role_name, "created": created, "roles": roles.get_all_roles()}
+        await broadcast_to_all(server_data["connected_clients"], {
+            "cmd": "roles_list",
+            "roles": roles.get_all_roles()
+        }, server_data)
+
+    return {"cmd": "role_create", "name": role_name, "created": created}
 
 
-def handle_role_update(ws, message, match_cmd, server_data):
+async def handle_role_update(ws, message, match_cmd, server_data):
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
@@ -82,10 +88,15 @@ def handle_role_update(ws, message, match_cmd, server_data):
             "color": role_data.get("color")
         }, server_data)
 
-    return {"cmd": "role_update", "name": role_name, "updated": updated, "roles": roles.get_all_roles()}
+        await broadcast_to_all(server_data["connected_clients"], {
+            "cmd": "roles_list",
+            "roles": roles.get_all_roles()
+        }, server_data)
+
+    return {"cmd": "role_update", "name": role_name, "updated": updated}
 
 
-def handle_role_set(ws, message, match_cmd, server_data):
+async def handle_role_set(ws, message, match_cmd, server_data):
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
@@ -112,10 +123,15 @@ def handle_role_set(ws, message, match_cmd, server_data):
             "color": role_data.get("color")
         }, server_data)
 
-    return {"cmd": "role_set", "name": role_name, "updated": updated, "roles": roles.get_all_roles()}
+        await broadcast_to_all(server_data["connected_clients"], {
+            "cmd": "roles_list",
+            "roles": roles.get_all_roles()
+        }, server_data)
+
+    return {"cmd": "role_set", "name": role_name, "updated": updated}
 
 
-def handle_role_delete(ws, message, match_cmd, server_data):
+async def handle_role_delete(ws, message, match_cmd, server_data):
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
@@ -149,6 +165,11 @@ def handle_role_delete(ws, message, match_cmd, server_data):
     if server_data:
         server_data["plugin_manager"].trigger_event("role_delete", ws, {
             "role_name": role_name
+        }, server_data)
+
+        await broadcast_to_all(server_data["connected_clients"], {
+            "cmd": "roles_list",
+            "roles": roles.get_all_roles()
         }, server_data)
 
     return {"cmd": "role_delete", "name": role_name, "deleted": deleted}

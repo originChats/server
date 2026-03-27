@@ -41,16 +41,24 @@ class FileWatcher(FileSystemEventHandler):
     def on_modified(self, event):
         if event.is_directory:
             return
-        
+
         filename = os.path.basename(event.src_path)
-             # Handle users.json changes
-        if filename == 'users.json' or filename == 'roles.json':
+        # Handle users.json changes
+        if filename == 'users.json':
             Logger.edit(f"Users file changed: {event.src_path}")
             asyncio.run_coroutine_threadsafe(
-                self._handle_users_change(), 
+                self._handle_users_change(),
                 self.main_loop
             )
-        
+
+        # Handle roles.json changes
+        elif filename == 'roles.json':
+            Logger.edit(f"Roles file changed: {event.src_path}")
+            asyncio.run_coroutine_threadsafe(
+                self._handle_roles_change(),
+                self.main_loop
+            )
+
         # Handle channels.json changes
         elif filename == 'channels.json':
             Logger.edit(f"Channels file changed: {event.src_path}")
@@ -70,6 +78,16 @@ class FileWatcher(FileSystemEventHandler):
 
         except Exception as e:
             Logger.error(f"Error handling users.json change: {e}")
+
+    async def _handle_roles_change(self):
+        try:
+            roles.reload_roles()
+            await self.broadcast_func({
+                "cmd": "roles_list",
+                "roles": roles.get_all_roles()
+            })
+        except Exception as e:
+            Logger.error(f"Error handling roles.json change: {e}")
     
     async def _handle_channels_change(self):
         """Handle channels.json file changes"""

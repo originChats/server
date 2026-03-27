@@ -1419,13 +1419,13 @@ async def handle(ws, message, server_data: dict):
             case "roles_list":
                 return handle_roles_list(ws, message, match_cmd)
             case "role_create":
-                return handle_role_create(ws, message, match_cmd, server_data)
+                return await handle_role_create(ws, message, match_cmd, server_data)
             case "role_update":
-                return handle_role_update(ws, message, match_cmd, server_data)
+                return await handle_role_update(ws, message, match_cmd, server_data)
             case "role_set":
-                return handle_role_set(ws, message, match_cmd, server_data)
+                return await handle_role_set(ws, message, match_cmd, server_data)
             case "role_delete":
-                return handle_role_delete(ws, message, match_cmd, server_data)
+                return await handle_role_delete(ws, message, match_cmd, server_data)
             case "role_permissions_set":
                 return handle_role_permissions_set(ws, message, match_cmd)
             case "role_permissions_get":
