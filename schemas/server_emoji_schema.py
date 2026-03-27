@@ -1,5 +1,5 @@
 from typing import Literal, Optional
-from pydantic import BaseModel, Base64Str, field_validator
+from pydantic import BaseModel, field_validator
 import re
 import base64
 
@@ -8,7 +8,23 @@ DATA_URI_PATTERN = re.compile(r"^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$")
 class Emoji_add(BaseModel):
     cmd: Literal["emoji_add"]
     name: str
-    image: Base64Str
+    image: str
+
+    @field_validator("image")
+    @classmethod
+    def validate_data_uri(cls, v):
+        match = DATA_URI_PATTERN.match(v)
+        if not match:
+            raise ValueError("Invalid image data URI")
+
+        mime, b64_data = match.groups()
+
+        try:
+            base64.b64decode(b64_data, validate=True)
+        except Exception:
+            raise ValueError("Invalid base64 image data")
+
+        return v
     
 class Emoji_delete(BaseModel):
     cmd: Literal["emoji_delete"]
