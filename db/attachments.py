@@ -271,13 +271,47 @@ def save_attachment(
             if mime_type.startswith("image/") and mime_type != "image/svg+xml":
                 try:
                     image = Image.open(BytesIO(file_bytes))
-                    for key in list(image.info.keys()):
-                        if isinstance(key, str) and key.lower() in ["exif", "gps", "location", "geotag"]:
-                            del image.info[key]
-                    save_kwargs = {}
-                    if image.format == "JPEG":
-                        save_kwargs["quality"] = 95
-                    image.save(filepath, **save_kwargs)
+                    
+                    compression_config = get_config_value("attachments", "compression", default={})
+                    compression_enabled = compression_config.get("enabled", True)
+                    
+                    if compression_enabled:
+                        max_width = compression_config.get("max_width", 1920)
+                        max_height = compression_config.get("max_height", 1920)
+                        
+                        if image.width > max_width or image.height > max_height:
+                            image.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
+                        
+                        if image.mode in ("RGBA", "P"):
+                            if image.format == "JPEG" or mime_type == "image/jpeg":
+                                background = Image.new("RGB", image.size, (255, 255, 255))
+                                if image.mode == "P":
+                                    image = image.convert("RGBA")
+                                background.paste(image, mask=image.split()[-1] if image.mode == "RGBA" else None)
+                                image = background
+                        
+                        save_kwargs = {}
+                        output_format = image.format
+                        
+                        if mime_type == "image/jpeg" or output_format == "JPEG":
+                            save_kwargs["quality"] = compression_config.get("jpeg_quality", 85)
+                            save_kwargs["optimize"] = True
+                            if image.mode != "RGB":
+                                image = image.convert("RGB")
+                        elif mime_type == "image/webp" or output_format == "WEBP":
+                            save_kwargs["quality"] = compression_config.get("webp_quality", 85)
+                        elif mime_type == "image/png" or output_format == "PNG":
+                            save_kwargs["compress_level"] = compression_config.get("png_compression", 6)
+                        
+                        image.save(filepath, **save_kwargs)
+                    else:
+                        for key in list(image.info.keys()):
+                            if isinstance(key, str) and key.lower() in ["exif", "gps", "location", "geotag"]:
+                                del image.info[key]
+                        save_kwargs = {}
+                        if image.format == "JPEG":
+                            save_kwargs["quality"] = 95
+                        image.save(filepath, **save_kwargs)
                 except Exception:
                     with open(filepath, "wb") as f:
                         f.write(file_bytes)
@@ -288,6 +322,8 @@ def save_attachment(
             Logger.error(f"Failed to save attachment file: {e}")
             return None
 
+        actual_size = os.path.getsize(filepath)
+
         now = time.time()
         if permanent:
             expiration_days = get_permanent_expiration_days()
@@ -295,7 +331,7 @@ def save_attachment(
                 expiration_days = custom_expires_in_days
             expires_at = now + (expiration_days * 24 * 60 * 60)
         else:
-            max_expiration_days = calculate_expiration_days(size)
+            max_expiration_days = calculate_expiration_days(actual_size)
             free_tier_max = get_free_tier_max_expiration_days()
             if max_expiration_days > free_tier_max:
                 max_expiration_days = free_tier_max
@@ -310,7 +346,7 @@ def save_attachment(
             "filename": filename,
             "original_name": original_name,
             "mime_type": mime_type,
-            "size": size,
+            "size": actual_size,
             "hash": file_hash,
             "uploader_id": uploader_id,
             "uploader_name": uploader_name,
