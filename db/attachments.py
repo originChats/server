@@ -136,6 +136,10 @@ def get_max_attachments_per_user() -> int:
     return get_config_value("attachments", "max_attachments_per_user", default=-1)
 
 
+def get_free_tier_max_expiration_days() -> int:
+    return get_config_value("attachments", "free_tier_max_expiration_days", default=7)
+
+
 def get_user_attachment_count(uploader_id: str) -> int:
     """Get the number of non-expired attachments for a user."""
     attachments = _load_attachments()
@@ -241,6 +245,9 @@ def save_attachment(
                         expiration_days = custom_expires_in_days
                 else:
                     max_expiration_days = calculate_expiration_days(size)
+                    free_tier_max = get_free_tier_max_expiration_days()
+                    if max_expiration_days > free_tier_max:
+                        max_expiration_days = free_tier_max
                     if custom_expires_in_days is not None:
                         expiration_days = min(custom_expires_in_days, max_expiration_days)
                     else:
@@ -289,6 +296,9 @@ def save_attachment(
             expires_at = now + (expiration_days * 24 * 60 * 60)
         else:
             max_expiration_days = calculate_expiration_days(size)
+            free_tier_max = get_free_tier_max_expiration_days()
+            if max_expiration_days > free_tier_max:
+                max_expiration_days = free_tier_max
             if custom_expires_in_days is not None:
                 expiration_days = min(custom_expires_in_days, max_expiration_days)
             else:

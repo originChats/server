@@ -18,6 +18,7 @@ DEFAULT_CONFIG = {
         "uploads_per_minute": 10,
         "subscription_cache_ttl": 300,
         "max_attachments_per_user": -1,
+        "free_tier_max_expiration_days": 7,
     },
     "rate_limiting": {
         "enabled": True,
