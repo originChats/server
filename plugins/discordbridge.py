@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 import gc
 from discord.utils import get
+from handlers.websocket_utils import broadcast_to_all, send_to_client, _get_ws_attr
 
 def getInfo():
     return {
@@ -32,8 +33,6 @@ import server
 
 import discord
 from discord.ext import commands
-
-
 
 sharedchannels = []
 originchannels = []
@@ -106,7 +105,7 @@ async def on_message(message):
 
     sendmessage = {
         "user": message.author.name,
-        "content": message.content,
+        "content": "https://github.com/fries-git/saltychatsserver/blob/main/plugins/bridgeicons/discord.png?raw=true" + " " + message.content,
         "timestamp": time.time(),
         "id": str(uuid.uuid4())
     }
@@ -144,23 +143,25 @@ async def on_message(message):
 async def start_bot():
     await bot.start(DISCORD_BOT_TOKEN)
 
-
 async def on_new_message(ws, message_data, server_data=None):
-        if not ws or not _get_ws_attr(ws, "authenticated", False):
+
+    channel_name = message_data.get('channel')
+    if not channel_name or channel_name not in sharedchannels:
+        print ("Invalid Channel.")
         return
-    
-    if not server_data or "rate_limiter" not in server_data:
+
+    guild = bot.get_guild(int(DISCORD_GUILD_ID))
+    if not guild:
         return
-    channel = get(guild.text_channels, name='general')
-    user_id = message_data.get('user_id')
-    username = message_data.get('username')
+
+    username = message_data.get('username', '')
     content = message_data.get('content', '')
-    channel = message_data.get('channel')
-    message_obj = message_data.get('message', {})
-    message_id = message_obj.get('id')
-    channel = get(guild.text_channels, name=channel)
+    channel = get(guild.text_channels, name=channel_name)
     if channel:
-        await channel.send(username + ": " + content)
+        print ("Sending to channel!")
+        await channel.send(username + content)
+    else:
+        print ("Channel not found!")
     
 
 
@@ -168,10 +169,8 @@ def init():
     try:
         loop = asyncio.get_running_loop()
         loop.create_task(start_bot())
-        loop.create_task(on_new_message())
     except RuntimeError:
         loop = asyncio.get_event_loop()
         loop.create_task(start_bot())
-        loop.create_task(on_new_message())
 
 init()

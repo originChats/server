@@ -1,0 +1,10 @@
+from handlers.websocket_utils import broadcast_to_all, send_to_client, _get_ws_attr
+import time
+import asyncio
+from logger import Logger as log
+
+async def main():
+    log.error(_get_ws_attr)
+time.sleep(1)
+loop = asyncio.get_running_loop()
+loop.create_task(main())
