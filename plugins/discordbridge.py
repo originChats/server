@@ -159,7 +159,7 @@ async def on_new_message(ws, message_data, server_data=None):
     channel = get(guild.text_channels, name=channel_name)
     if channel:
         print ("Sending to channel!")
-        await channel.send(username + content)
+        await channel.send("https://github.com/fries-git/saltychatsserver/blob/main/plugins/bridgeicons/ochats.png?raw=true" + " " + username + ": " + content)
     else:
         print ("Channel not found!")
     
