@@ -47,10 +47,10 @@ def count_roles() -> int:
 
 
 def get_all_roles():
-    """Retrieve all roles from the database."""
+    """Retrieve all roles from the database, ordered by position."""
     init_db()
-    
-    rows = fetchall("SELECT * FROM roles")
+
+    rows = fetchall("SELECT * FROM roles ORDER BY position ASC, name ASC")
     return {row["name"]: _process_role(row) for row in rows}
 
 
@@ -63,7 +63,8 @@ def _process_role(row):
         "hoisted": bool(row.get("hoisted", 0)),
         "permissions": _json_loads(row.get("permissions")) or {},
         "self_assignable": bool(row.get("self_assignable", 0)),
-        "category": row.get("category")
+        "category": row.get("category"),
+        "position": row.get("position", 0) or 0
     }
 
 
@@ -99,11 +100,13 @@ def update_role(role_name, role_data):
             return False
         
         execute(
-            "UPDATE roles SET description = ?, color = ?, hoisted = ?, permissions = ? WHERE name = ?",
+            "UPDATE roles SET description = ?, color = ?, hoisted = ?, permissions = ?, self_assignable = ?, category = ? WHERE name = ?",
             (role_data.get("description"),
              role_data.get("color"),
              1 if role_data.get("hoisted") else 0,
              _json_dumps(role_data.get("permissions", {})),
+             1 if role_data.get("self_assignable") else 0,
+             role_data.get("category"),
              role_name)
         )
         return True
@@ -288,3 +291,18 @@ def reload_roles():
     """Reload roles from database (no-op for SQLite, kept for compatibility)."""
     init_db()
     return get_all_roles()
+
+
+def reorder_roles(role_order):
+    """Reorder roles by updating their positions."""
+    init_db()
+
+    with _lock:
+        for i, role_name in enumerate(role_order):
+            if not role_exists(role_name):
+                return False
+            execute(
+                "UPDATE roles SET position = ? WHERE name = ?",
+                (i, role_name)
+            )
+        return True

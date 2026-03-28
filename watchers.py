@@ -16,6 +16,7 @@ class FileWatcher(FileSystemEventHandler):
         self.connected_clients_getter = server_data_getter
         self._users_cache = {}
         self._channels_cache = []
+        self._roles_cache = {}
         self._load_initial_state()
         super().__init__()
 
@@ -31,13 +32,22 @@ class FileWatcher(FileSystemEventHandler):
         except Exception:
             self._channels_cache = []
 
+        try:
+            self._roles_cache = {r["name"]: r for r in roles.get_all_roles()} if hasattr(roles, 'get_all_roles') else {}
+        except Exception:
+            self._roles_cache = {}
+
     def on_modified(self, event):
         if event.is_directory:
             return
 
         filename = os.path.basename(event.src_path)
-        
-        if filename == 'originchats.db' or filename.startswith('originchats.db-'):
+
+        # Don't watch WAL/shm files - they change on every write
+        if filename.startswith('originchats.db-'):
+            return
+
+        if filename == 'originchats.db':
             Logger.edit(f"Database file changed: {event.src_path}")
             asyncio.run_coroutine_threadsafe(
                 self._handle_database_change(),
@@ -45,44 +55,15 @@ class FileWatcher(FileSystemEventHandler):
             )
 
     async def _handle_database_change(self):
-        try:
-            users.reload_users()
-            await self.broadcast_func({
-                "cmd": "users_list",
-                "users": users.get_users()
-            })
-
-            roles.reload_roles()
-            await self.broadcast_func({
-                "cmd": "roles_list",
-                "roles": roles.get_all_roles()
-            })
-
-        except Exception as e:
-            Logger.error(f"Error handling database change: {e}")
+        # Don't broadcast users_list on every DB change - too noisy
+        # Only broadcast specific changes when needed
+        pass
 
     async def _handle_users_change(self):
-        try:
-            users.reload_users()
-            await self.broadcast_func({
-                "cmd": "users_list",
-                "users": users.get_users()
-            })
-
-            self._broadcast_nickname_changes()
-
-        except Exception as e:
-            Logger.error(f"Error handling users change: {e}")
+        pass
 
     async def _handle_roles_change(self):
-        try:
-            roles.reload_roles()
-            await self.broadcast_func({
-                "cmd": "roles_list",
-                "roles": roles.get_all_roles()
-            })
-        except Exception as e:
-            Logger.error(f"Error handling roles change: {e}")
+        pass
 
     async def _handle_channels_change(self):
         """Handle channels change"""

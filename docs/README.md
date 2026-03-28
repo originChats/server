@@ -87,6 +87,7 @@ All commands documented individually in `docs/commands/`.
 | [`roles_list`](commands/roles_list.md) | List all roles |
 | [`role_create`](commands/role_create.md) | Create role (owner) |
 | [`role_update`](commands/role_update.md) | Update role (owner) |
+| [`role_reorder`](commands/role_reorder.md) | Reorder roles (owner) |
 | [`role_delete`](commands/role_delete.md) | Delete role (owner) |
 | [`user_roles_set`](commands/user_roles_set.md) | Set user roles (owner) |
 | [`user_roles_get`](commands/user_roles_get.md) | Get user's roles |
@@ -154,6 +155,8 @@ All commands documented individually in `docs/commands/`.
 | Command | Description |
 |---------|-------------|
 | [`ping`](commands/ping.md) | Ping the server |
+| [`server_info`](commands/server_info.md) | Get server info |
+| [`server_update`](commands/server_update.md) | Update server info (owner) |
 | [`plugins_list`](commands/plugins_list.md) | List plugins |
 | [`plugins_reload`](commands/plugins_reload.md) | Reload plugins |
 | [`rate_limit_status`](commands/rate_limit_status.md) | Check rate limit |
@@ -207,4 +210,4 @@ Users can use these slash commands:
 
 ---
 
-**Last Updated:** 2026-03-25
+**Last Updated:** 2026-03-28

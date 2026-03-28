@@ -28,6 +28,8 @@ async def handle_role_create(ws, message, match_cmd, server_data):
         if message["self_assignable"] and not roles.can_be_self_assignable(role_name):
             return _error(f"Role '{role_name}' cannot be made self-assignable", match_cmd)
         role_data["self_assignable"] = message["self_assignable"]
+    if "category" in message:
+        role_data["category"] = message["category"]
 
     if roles.role_exists(role_name):
         return _error("Role already exists", match_cmd)
@@ -40,12 +42,38 @@ async def handle_role_create(ws, message, match_cmd, server_data):
             "color": message.get("color")
         }, server_data)
 
-        await broadcast_to_all(server_data["connected_clients"], {
-            "cmd": "roles_list",
-            "roles": roles.get_all_roles()
-        }, server_data)
+    await broadcast_to_all(server_data["connected_clients"], {
+        "cmd": "roles_list",
+        "roles": roles.get_all_roles()
+    }, server_data)
 
     return {"cmd": "role_create", "name": role_name, "created": created}
+
+
+async def handle_role_reorder(ws, message, match_cmd, server_data):
+    user_id, error = _require_user_id(ws, "Authentication required")
+    if error:
+        return error
+    _, error = _require_user_roles(user_id, requiredRoles=["owner"])
+    if error:
+        return error
+
+    if not server_data:
+        return _error("Server data not available", match_cmd)
+
+    role_order = message.get("roles")
+    if not role_order or not isinstance(role_order, list):
+        return _error("Roles array is required", match_cmd)
+
+    if not roles.reorder_roles(role_order):
+        return _error("Failed to reorder roles", match_cmd)
+
+    await broadcast_to_all(server_data["connected_clients"], {
+        "cmd": "roles_list",
+        "roles": roles.get_all_roles()
+    }, server_data)
+
+    return {"cmd": "role_reorder", "roles": role_order}
 
 
 async def handle_role_update(ws, message, match_cmd, server_data):
@@ -71,7 +99,7 @@ async def handle_role_update(ws, message, match_cmd, server_data):
 
     if message.get("description") is not None:
         role_data["description"] = message["description"]
-    if message.get("color") is not None:
+    if "color" in message:
         role_data["color"] = message["color"]
     if message.get("hoisted") is not None:
         role_data["hoisted"] = message["hoisted"]
@@ -79,6 +107,10 @@ async def handle_role_update(ws, message, match_cmd, server_data):
         if message["self_assignable"] and not roles.can_be_self_assignable(role_name):
             return _error(f"Role '{role_name}' cannot be made self-assignable", match_cmd)
         role_data["self_assignable"] = message["self_assignable"]
+    if message.get("permissions") is not None:
+        role_data["permissions"] = message["permissions"]
+    if "category" in message:
+        role_data["category"] = message["category"]
 
     updated = roles.update_role(role_name, role_data)
     if server_data:

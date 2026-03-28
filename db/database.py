@@ -116,13 +116,14 @@ CREATE INDEX IF NOT EXISTS idx_users_validator ON users(validator);
 
 -- Roles table
 CREATE TABLE IF NOT EXISTS roles (
-    name TEXT PRIMARY KEY,
-    description TEXT,
-    color TEXT,
-    hoisted INTEGER DEFAULT 0,
-    permissions TEXT,
-    self_assignable INTEGER DEFAULT 0,
-    category TEXT
+name TEXT PRIMARY KEY,
+description TEXT,
+color TEXT,
+hoisted INTEGER DEFAULT 0,
+permissions TEXT,
+self_assignable INTEGER DEFAULT 0,
+category TEXT,
+position INTEGER DEFAULT 0
 );
 """
 
@@ -140,24 +141,39 @@ def get_connection() -> sqlite3.Connection:
 def init_db(db_path: Optional[str] = None) -> None:
     """Initialize the database, creating tables if they don't exist."""
     global _DB_PATH, _initialized
-    
+
     with _init_lock:
         if _initialized:
             return
-        
+
         if db_path:
             _DB_PATH = db_path
-        
+
         os.makedirs(os.path.dirname(_DB_PATH), exist_ok=True)
-        
+
         # Check if database exists, handle migration or fresh setup
         if not os.path.exists(_DB_PATH):
             _handle_first_time_setup()
-        
+
         conn = get_connection()
         conn.executescript(SCHEMA)
         conn.commit()
+
+        _run_schema_migrations(conn)
+
+        conn.commit()
         _initialized = True
+
+
+def _run_schema_migrations(conn):
+    """Run schema migrations for existing databases."""
+    try:
+        cursor = conn.execute("PRAGMA table_info(roles)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "position" not in columns:
+            conn.execute("ALTER TABLE roles ADD COLUMN position INTEGER DEFAULT 0")
+    except Exception:
+        pass
 
 
 def _handle_first_time_setup():
