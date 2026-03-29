@@ -2,7 +2,7 @@ from db import users
 from handlers.messages.helpers import _error, _require_user_id, _require_permission
 
 
-def handle_rate_limit_status(ws, message, match_cmd, server_data):
+async def handle_rate_limit_status(ws, message, match_cmd, server_data):
     user_id, error = _require_user_id(ws)
     if error:
         return error
@@ -22,7 +22,7 @@ def handle_rate_limit_status(ws, message, match_cmd, server_data):
     return {"cmd": "rate_limit_status", "user": status_username, "status": status}
 
 
-def handle_rate_limit_reset(ws, message, match_cmd, server_data):
+async def handle_rate_limit_reset(ws, message, match_cmd, server_data):
     user_id, error = _require_user_id(ws)
     if error:
         return error

@@ -104,15 +104,15 @@ async def handle_authentication(websocket, data, config_data, connected_clients,
         })
         Logger.success(f"Broadcast user_join: {username} joined the server")
 
-        # Plugin event
-        if server_data and "plugin_manager" in server_data:
-            server_data["plugin_manager"].trigger_event("user_join", websocket, {
-                "username": username,
-                "user_id": user_id,
-                "roles": user.get("roles"),
-                "color": color,
-                "user": user
-            }, server_data)
+    # Plugin event
+    if server_data and "plugin_manager" in server_data:
+        server_data["plugin_manager"].trigger_event("user_join", websocket, {
+            "username": username,
+            "user_id": user_id,
+            "roles": user.get("roles"),
+            "color": color,
+            "user": user
+        }, server_data)
 
     was_online = False
     if server_data and "connected_usernames" in server_data:

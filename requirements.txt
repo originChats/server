@@ -13,3 +13,4 @@ pydantic==2.10.5
 pillow==12.1.1
 pywebpush==2.0.3
 py-vapid==1.9.4
+aiosqlite==0.20.0

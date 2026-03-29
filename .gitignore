@@ -14,6 +14,9 @@ db/serverEmojis/*
 db/serverStickers/*
 !db/serverStickers/.gitkeep
 
+db/threadMessages/*
+!db/threadMessages/.gitkeep
+
 db/attachments/*
 !db/attachments/.gitkeep
 

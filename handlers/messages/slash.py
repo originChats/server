@@ -171,7 +171,8 @@ async def handle_slash_call(ws, message, match_cmd, server_data):
                 }
 
                 channels.save_channel_message(channel, out_msg)
-                out_msg_for_client = channels.convert_messages_to_user_format([out_msg])[0]
+                out_msg_for_client = channels.convert_messages_to_user_format([out_msg])
+                out_msg_for_client = out_msg_for_client[0]
                 out_msg_for_client["interaction"] = out_msg["interaction"]
 
                 return {"cmd": "message_new", "message": out_msg_for_client, "channel": channel, "global": True}
@@ -264,7 +265,7 @@ async def handle_slash_call(ws, message, match_cmd, server_data):
     if send_to_client_func:
         loop.create_task(send_to_client_func(commander_ws, slash_call_message))
 
-    return {"cmd": "slash_call_sent", "val": f"Command /{cmd_name} invoked"}
+    return slash_call_message
 
 
 def handle_slash_response(ws, message, match_cmd, server_data):
@@ -319,7 +320,8 @@ def handle_slash_response(ws, message, match_cmd, server_data):
         out_msg["embeds"] = embeds
 
     channels.save_channel_message(channel, out_msg)
-    out_msg_for_client = channels.convert_messages_to_user_format([out_msg])[0]
+    out_msg_for_client = channels.convert_messages_to_user_format([out_msg])
+    out_msg_for_client = out_msg_for_client[0]
     out_msg_for_client["interaction"] = out_msg["interaction"]
     if embeds:
         out_msg_for_client["embeds"] = embeds

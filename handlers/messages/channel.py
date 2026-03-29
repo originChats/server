@@ -1,4 +1,4 @@
-from db import channels, users
+from db import channels, users, threads
 from handlers.messages.helpers import _error, _require_user_id, _require_permission
 
 
@@ -28,6 +28,15 @@ def handle_channels_get(ws, message, match_cmd, server_data):
                         "muted": data.get("muted", False)
                     })
                 channel["voice_state"] = participants
+            elif channel.get("type") == "forum":
+                channel_name = channel.get("name")
+                channel_threads = threads.get_channel_threads(channel_name)
+                for thread in channel_threads:
+                    if "participants" in thread:
+                        thread["participants"] = [users.get_username_by_id(pid) for pid in thread["participants"]]
+                    if "created_by" in thread:
+                        thread["created_by"] = users.get_username_by_id(thread["created_by"]) or thread["created_by"]
+                channel["threads"] = channel_threads
 
     return {"cmd": "channels_get", "val": channels_list}
 

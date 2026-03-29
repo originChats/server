@@ -2,6 +2,7 @@ import json
 import time
 import uuid
 from db import channels
+from db import shared
 from logger import Logger
 
 
@@ -59,10 +60,10 @@ def format_github_push_message(payload: dict) -> dict:
     return embed
 
 
-def handle_github_webhook(payload: dict, event_type: str, channel_name: str):
+async def handle_github_webhook(payload: dict, event_type: str, channel_name: str):
     if event_type == "push":
         embed = format_github_push_message(payload)
-        
+
         message_id = str(uuid.uuid4())
         out_msg = {
             "user": "originChats",
@@ -76,17 +77,18 @@ def handle_github_webhook(payload: dict, event_type: str, channel_name: str):
             },
             "embeds": [embed]
         }
-        
+
         if not channels.channel_exists(channel_name):
             return None, "Channel not found"
-        
+
         channels.save_channel_message(channel_name, out_msg)
-        
-        out_msg_for_client = channels.convert_messages_to_user_format([out_msg])[0]
+
+        out_msg_for_client = shared.convert_messages_to_user_format([out_msg])
+        out_msg_for_client = out_msg_for_client[0]
         out_msg_for_client["embeds"] = [embed]
         out_msg_for_client["webhook"] = out_msg["webhook"]
-        
+
         return out_msg_for_client, None
-    
+
     Logger.info(f"[GitHub Webhook] Received unhandled event type: {event_type}")
     return None, f"Unhandled event type: {event_type}"

@@ -7,7 +7,7 @@ from handlers.websocket_utils import _get_ws_attr
 from logger import Logger
 
 
-def handle_attachment_delete(ws, message: Dict[str, Any], server_data: Dict[str, Any], match_cmd: str) -> Optional[Dict[str, Any]]:
+async def handle_attachment_delete(ws, message: Dict[str, Any], server_data: Dict[str, Any], match_cmd: str) -> Optional[Dict[str, Any]]:
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
@@ -39,7 +39,7 @@ def handle_attachment_delete(ws, message: Dict[str, Any], server_data: Dict[str,
     }
 
 
-def handle_attachment_get(ws, message: Dict[str, Any], server_data: Dict[str, Any], match_cmd: str) -> Optional[Dict[str, Any]]:
+async def handle_attachment_get(ws, message: Dict[str, Any], server_data: Dict[str, Any], match_cmd: str) -> Optional[Dict[str, Any]]:
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error

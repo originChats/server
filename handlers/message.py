@@ -16,10 +16,6 @@ from handlers.messages.poll import handle_poll_create, handle_poll_vote, handle_
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logger import Logger
 from config_store import get_config_value
-import slash_handlers
-from pydantic import ValidationError
-from schemas.slash_command_schema import SlashCommand
-from schemas.server_emoji_schema import Emoji_add, Emoji_delete, Emoji_get_all, Emoji_update, Emoji_get_filename, Emoji_get_id
 from handlers.websocket_utils import broadcast_to_voice_channel_with_viewers, broadcast_to_all, _get_ws_attr, _set_ws_attr
 from handlers import push as push_handler
 from handlers.helpers.validation import validate_embeds
@@ -158,11 +154,11 @@ def check_ping_in_content(content, ping_patterns):
 
 def validate_role_mentions_permissions(content, sender_user_roles):
     """Validate that the sender can mention the roles in the content.
-    
+
     Args:
         content: The message content to validate
         sender_user_roles: List of roles the sender has
-        
+
     Returns:
         tuple: (is_valid, error_message). is_valid is True if all role mentions are allowed.
     """
@@ -177,21 +173,21 @@ def validate_role_mentions_permissions(content, sender_user_roles):
 
 def get_message_pings(content, sender_user_roles):
     """Get all valid pings from message content, respecting role mention permissions.
-    
+
     This function extracts pings from content and filters out role mentions
     that the sender doesn't have permission to use.
-    
+
     Args:
         content: The message content to parse
         sender_user_roles: List of roles the message sender has
-        
+
     Returns:
         dict: Contains 'users' (set of usernames) and 'roles' (set of role names)
-              that were validly mentioned
+        that were validly mentioned
     """
     mentioned_users = extract_user_mentions(content)
     mentioned_roles = extract_role_mentions(content)
-    
+
     valid_users = set()
     for username in mentioned_users:
         user_id = users.get_id_by_username(username)
@@ -200,14 +196,14 @@ def get_message_pings(content, sender_user_roles):
             valid_users.add(actual_username)
         else:
             valid_users.add(username)
-    
+
     valid_roles = set()
     for role in mentioned_roles:
         if roles.role_exists(role) and roles.can_role_mention_role(sender_user_roles, role):
             valid_roles.add(role)
         elif not roles.role_exists(role):
             valid_roles.add(role)
-    
+
     return {
         "users": list(valid_users),
         "roles": list(valid_roles),
@@ -225,11 +221,11 @@ def _get_thread_context(thread_id, user_id, user_roles, require_view=True):
         return None, ("This thread is locked", "thread_id")
 
     parent_channel = thread_data.get("parent_channel")
-    
+
     if require_view:
         if not channels.does_user_have_permission(parent_channel, user_roles, "view"):
             return None, ("You do not have permission to view this thread", "thread_id")
-    
+
     return {"thread": thread_data, "parent_channel": parent_channel}, None
 
 
@@ -286,19 +282,19 @@ def _validate_option_value(option_name, value, option):
 def _require_voice_channel_access(user_id, channel_name, match_cmd):
     if not channel_name:
         return None, _error("Channel name is required", match_cmd)
-    
+
     user_data = users.get_user(user_id)
     if not user_data:
         return None, _error("User not found", match_cmd)
-    
+
     user_roles = user_data.get("roles", [])
     if not channels.does_user_have_permission(channel_name, user_roles, "view"):
         return None, _error("You do not have permission to access this voice channel", match_cmd)
-    
+
     channel_info = channels.get_channel(channel_name)
     if not channel_info or channel_info.get("type") != "voice":
         return None, _error("This is not a voice channel", match_cmd)
-    
+
     return {"user_data": user_data, "channel_info": channel_info}, None
 
 
@@ -515,12 +511,16 @@ async def handle(ws, message, server_data: dict):
                     att_ids = [a["id"] for a in validated_attachments]
                     attachments_db.mark_attachments_referenced(att_ids)
 
+                out_msg_for_client = None
                 if thread_id:
                     threads.save_thread_message(thread_id, out_msg)
                     out_msg_for_client = threads.convert_messages_to_user_format([out_msg])[0]
-                else:
+                elif channel_name:
                     channels.save_channel_message(channel_name, out_msg)
                     out_msg_for_client = channels.convert_messages_to_user_format([out_msg])[0]
+
+                if not out_msg_for_client:
+                    return _error("Failed to save message", match_cmd)
 
                 if "ping" in out_msg:
                     out_msg_for_client["ping"] = out_msg["ping"]
@@ -844,7 +844,7 @@ async def handle(ws, message, server_data: dict):
                     return error
 
                 user_roles, error = _require_user_roles(user_id)
-                if error:
+                if error or not user_roles:
                     return error
 
                 channel_name = message.get("channel")
@@ -983,6 +983,10 @@ async def handle(ws, message, server_data: dict):
                 bounds = message.get("bounds", {"above": 50, "below": 50})
                 above = min(bounds.get("above", 50), 200)
                 below = min(bounds.get("below", 50), 200)
+
+                messages = None
+                start_idx = None
+                end_idx = None
 
                 if is_thread and thread_id:
                     messages, start_idx, end_idx = threads.get_thread_messages_around(thread_id, around, above, below)
@@ -1539,7 +1543,7 @@ async def handle(ws, message, server_data: dict):
 
                 if not updated_user:
                     return _error("User not found", match_cmd)
-                return {"cmd": "user_roles_set", "user": username, "roles": updated_user.get("roles", []), "color": color, "set": True}
+                return {"cmd": "user_roles_get", "user": username, "roles": updated_user.get("roles", []), "color": color, "global": True}
             case "user_roles_get":
                 user_id, error = _require_user_id(ws, "Authentication required")
                 if error:
@@ -1559,7 +1563,12 @@ async def handle(ws, message, server_data: dict):
                 user_roles = users.get_user_roles(target_id)
                 username = users.get_username_by_id(target_id)
 
-                return {"cmd": "user_roles_get", "user": username, "roles": user_roles}
+                color = None
+                first_role_data = roles.get_role(user_roles[0])
+                if first_role_data:
+                    color = first_role_data.get("color")
+
+                return {"cmd": "user_roles_get", "user": username, "roles": user_roles, "color": color}
             case "users_banned_list":
                 user_id, error = _require_user_id(ws, "Authentication required")
                 if error:

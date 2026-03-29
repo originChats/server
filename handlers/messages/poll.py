@@ -12,11 +12,11 @@ async def handle_poll_create(ws, message, match_cmd, server_data):
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
-    
+
     error = _require_permission(user_id, "send_messages", match_cmd)
     if error:
         return error
-    
+
     channel = message.get("channel")
     thread_id = message.get("thread_id")
     question = message.get("question")
@@ -24,19 +24,22 @@ async def handle_poll_create(ws, message, match_cmd, server_data):
     allow_multiselect = message.get("allow_multiselect", False)
     expires_at = message.get("expires_at")
     duration_hours = message.get("duration_hours")
-    
+
+    if not user_id:
+        return _error("User ID is required", match_cmd)
+
     if not channel and not thread_id:
         return _error("Channel or thread_id is required", match_cmd)
-    
+
     if not question:
         return _error("Question is required", match_cmd)
-    
+
     if not options or len(options) < 2:
         return _error("At least 2 options are required", match_cmd)
-    
+
     if len(options) > 10:
         return _error("Cannot have more than 10 options", match_cmd)
-    
+
     for i, opt in enumerate(options):
         if isinstance(opt, str):
             options[i] = {"id": str(i), "text": opt}
@@ -45,12 +48,12 @@ async def handle_poll_create(ws, message, match_cmd, server_data):
                 return _error(f"Option {i} must have 'text'", match_cmd)
             if "id" not in opt:
                 opt["id"] = str(i)
-    
+
     if expires_at is None and duration_hours:
         expires_at = time.time() + (duration_hours * 3600)
-    
+
     user_roles = users.get_user_roles(user_id)
-    
+
     if thread_id:
         thread_data = threads.get_thread(thread_id)
         if not thread_data:
@@ -65,10 +68,10 @@ async def handle_poll_create(ws, message, match_cmd, server_data):
         if not channels.does_user_have_permission(channel, user_roles, "send"):
             return _error("You do not have permission to send messages in this channel", match_cmd)
         channel_name = channel
-    
+
     message_id = str(uuid.uuid4())
     now = time.time()
-    
+
     poll_id = polls.create_poll(
         message_id=message_id,
         question=question,
@@ -79,7 +82,7 @@ async def handle_poll_create(ws, message, match_cmd, server_data):
         expires_at=expires_at,
         created_by=user_id
     )
-    
+
     poll_embed = {
         "type": "poll",
         "poll": {
@@ -89,10 +92,10 @@ async def handle_poll_create(ws, message, match_cmd, server_data):
             "expires_at": expires_at
         }
     }
-    
+
     if question:
         poll_embed["title"] = question
-    
+
     msg_data = {
         "id": message_id,
         "user": user_id,
@@ -100,12 +103,12 @@ async def handle_poll_create(ws, message, match_cmd, server_data):
         "timestamp": now,
         "embeds": [poll_embed]
     }
-    
+
     if thread_id:
         threads.save_thread_message(thread_id, msg_data)
     else:
         channels.save_channel_message(channel, msg_data)
-    
+
     broadcast_data = {
         "cmd": "message_new",
         "id": message_id,
@@ -117,14 +120,14 @@ async def handle_poll_create(ws, message, match_cmd, server_data):
         "embeds": [poll_embed],
         "poll_id": poll_id
     }
-    
+
     if server_data:
         connected_clients = server_data.get("connected_clients", set())
         if thread_id:
             await broadcast_to_channel(connected_clients, broadcast_data, channel_name, server_data)
         else:
             await broadcast_to_channel(connected_clients, broadcast_data, channel, server_data)
-    
+
     return {
         "cmd": "poll_create",
         "poll_id": poll_id,
@@ -142,35 +145,38 @@ async def handle_poll_vote(ws, message, match_cmd, server_data):
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
-    
+
+    if not user_id:
+        return _error("User ID is required", match_cmd)
+
     poll_id = message.get("poll_id")
     message_id = message.get("message_id")
     option_ids = message.get("option_ids") or message.get("option_id")
-    
+
     if not poll_id and not message_id:
         return _error("poll_id or message_id is required", match_cmd)
-    
+
     if poll_id:
         poll_data = polls.get_poll(poll_id)
     else:
         poll_data = polls.get_poll_by_message(message_id)
         if poll_data:
             poll_id = poll_data["id"]
-    
+
     if not poll_data:
         return _error("Poll not found", match_cmd)
-    
+
     if isinstance(option_ids, str):
         option_ids = [option_ids]
-    
+
     if not option_ids:
         return _error("option_id or option_ids is required", match_cmd)
-    
+
     user_roles = users.get_user_roles(user_id)
-    
+
     channel = poll_data.get("channel")
     thread_id = poll_data.get("thread_id")
-    
+
     if thread_id:
         thread_data = threads.get_thread(thread_id)
         if thread_data:
@@ -180,14 +186,14 @@ async def handle_poll_vote(ws, message, match_cmd, server_data):
     elif channel:
         if not channels.does_user_have_permission(channel, user_roles, "view"):
             return _error("You do not have permission to view this poll", match_cmd)
-    
+
     for option_id in option_ids:
         success, error_msg = polls.vote_poll(poll_id, option_id, user_id)
         if not success:
             return _error(error_msg, match_cmd)
-    
+
     results = polls.get_poll_results(poll_id)
-    
+
     vote_update = {
         "cmd": "poll_vote_update",
         "poll_id": poll_id,
@@ -198,14 +204,14 @@ async def handle_poll_vote(ws, message, match_cmd, server_data):
         "option_ids": option_ids,
         "results": results
     }
-    
+
     if server_data:
         connected_clients = server_data.get("connected_clients", set())
         if thread_id:
             await broadcast_to_channel(connected_clients, vote_update, channel, server_data)
         elif channel:
             await broadcast_to_channel(connected_clients, vote_update, channel, server_data)
-    
+
     return {
         "cmd": "poll_vote",
         "poll_id": poll_id,
@@ -218,37 +224,37 @@ async def handle_poll_end(ws, message, match_cmd, server_data):
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
-    
+
     poll_id = message.get("poll_id")
     message_id = message.get("message_id")
-    
+
     if not poll_id and not message_id:
         return _error("poll_id or message_id is required", match_cmd)
-    
+
     if poll_id:
         poll_data = polls.get_poll(poll_id)
     else:
         poll_data = polls.get_poll_by_message(message_id)
         if poll_data:
             poll_id = poll_data["id"]
-    
+
     if not poll_data:
         return _error("Poll not found", match_cmd)
-    
+
     if poll_data["ended"]:
         return _error("Poll has already ended", match_cmd)
-    
+
     if poll_data["created_by"] != user_id:
         error = _require_permission(user_id, "manage_messages", match_cmd)
         if error:
             return error
-    
+
     success = polls.end_poll(poll_id)
     if not success:
         return _error("Failed to end poll", match_cmd)
-    
+
     results = polls.get_poll_results(poll_id)
-    
+
     end_update = {
         "cmd": "poll_end",
         "poll_id": poll_id,
@@ -257,7 +263,7 @@ async def handle_poll_end(ws, message, match_cmd, server_data):
         "thread_id": poll_data.get("thread_id"),
         "results": results
     }
-    
+
     if server_data:
         connected_clients = server_data.get("connected_clients", set())
         poll_channel = poll_data.get("channel")
@@ -265,7 +271,7 @@ async def handle_poll_end(ws, message, match_cmd, server_data):
             await broadcast_to_channel(connected_clients, end_update, poll_channel, server_data)
         elif poll_channel:
             await broadcast_to_channel(connected_clients, end_update, poll_channel, server_data)
-    
+
     return {
         "cmd": "poll_end",
         "poll_id": poll_id,
@@ -273,31 +279,34 @@ async def handle_poll_end(ws, message, match_cmd, server_data):
     }
 
 
-def handle_poll_results(ws, message, match_cmd):
+async def handle_poll_results(ws, message, match_cmd):
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
-    
+
+    if not user_id:
+        return _error("User ID is required", match_cmd)
+
     poll_id = message.get("poll_id")
     message_id = message.get("message_id")
-    
+
     if not poll_id and not message_id:
         return _error("poll_id or message_id is required", match_cmd)
-    
+
     if poll_id:
         poll_data = polls.get_poll(poll_id)
     else:
         poll_data = polls.get_poll_by_message(message_id)
         if poll_data:
             poll_id = poll_data["id"]
-    
+
     if not poll_data:
         return _error("Poll not found", match_cmd)
-    
+
     user_roles = users.get_user_roles(user_id)
     channel = poll_data.get("channel")
     thread_id = poll_data.get("thread_id")
-    
+
     if thread_id:
         thread_data = threads.get_thread(thread_id)
         if thread_data:
@@ -307,22 +316,25 @@ def handle_poll_results(ws, message, match_cmd):
     elif channel:
         if not channels.does_user_have_permission(channel, user_roles, "view"):
             return _error("You do not have permission to view this poll", match_cmd)
-    
+
     results = polls.get_poll_results(poll_id)
-    
+
+    if not results:
+        return _error("Poll results not found", match_cmd)
+
     user_votes = polls.get_user_vote(poll_id, user_id)
-    
-    for result in results["results"]:
+
+    for result in results.get("results", []):
         result["voted"] = result["id"] in user_votes
-    
-    if results["ended"]:
-        for result in results["results"]:
-            if result["voters"]:
+
+    if results.get("ended"):
+        for result in results.get("results", []):
+            if result.get("voters"):
                 result["voters"] = [users.get_username_by_id(uid) for uid in result["voters"]]
     else:
-        for result in results["results"]:
+        for result in results.get("results", []):
             result["voters"] = []
-    
+
     return {
         "cmd": "poll_results",
         "poll_id": poll_id,
@@ -331,31 +343,34 @@ def handle_poll_results(ws, message, match_cmd):
     }
 
 
-def handle_poll_get(ws, message, match_cmd):
+async def handle_poll_get(ws, message, match_cmd):
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
-    
+
+    if not user_id:
+        return _error("User ID is required", match_cmd)
+
     poll_id = message.get("poll_id")
     message_id = message.get("message_id")
-    
+
     if not poll_id and not message_id:
         return _error("poll_id or message_id is required", match_cmd)
-    
+
     if poll_id:
         poll_data = polls.get_poll(poll_id)
     else:
         poll_data = polls.get_poll_by_message(message_id)
         if poll_data:
             poll_id = poll_data["id"]
-    
+
     if not poll_data:
         return _error("Poll not found", match_cmd)
-    
+
     user_roles = users.get_user_roles(user_id)
     channel = poll_data.get("channel")
     thread_id = poll_data.get("thread_id")
-    
+
     if thread_id:
         thread_data = threads.get_thread(thread_id)
         if thread_data:
@@ -365,9 +380,9 @@ def handle_poll_get(ws, message, match_cmd):
     elif channel:
         if not channels.does_user_have_permission(channel, user_roles, "view"):
             return _error("You do not have permission to view this poll", match_cmd)
-    
+
     user_votes = polls.get_user_vote(poll_id, user_id)
-    
+
     return {
         "cmd": "poll_get",
         "poll": {

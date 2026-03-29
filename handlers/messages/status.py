@@ -17,7 +17,7 @@ async def handle_status_set(ws, message, match_cmd, server_data):
     if not users.set_status(user_id, status, text):
         return _error("Invalid status. Must be one of: online, idle, dnd, invisible", match_cmd)
 
-    username = _get_ws_username(ws)
+    username = await _get_ws_username(ws)
     status_data = {"status": status, "text": text or ""}
 
     previous_status = _get_ws_attr(ws, "status", {}).get("status", "online")
@@ -67,7 +67,7 @@ async def handle_status_set(ws, message, match_cmd, server_data):
     return {"cmd": "status_set", "status": status_data, "global": True}
 
 
-def handle_status_get(ws, message, match_cmd, server_data):
+async def handle_status_get(ws, message, match_cmd, server_data):
     _, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
@@ -86,5 +86,5 @@ def handle_status_get(ws, message, match_cmd, server_data):
     return {"cmd": "status", "username": target_username, "status": target_status}
 
 
-def _get_ws_username(ws):
+async def _get_ws_username(ws):
     return _get_ws_attr(ws, "username", users.get_username_by_id(_get_ws_attr(ws, "user_id", "")))

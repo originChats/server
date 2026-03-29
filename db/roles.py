@@ -1,231 +1,280 @@
 import copy
+import json
+import os
 import threading
 import uuid
 
-from .database import init_db, execute, fetchone, fetchall, _json_dumps, _json_loads
-
-_lock = threading.RLock()
+_MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+roles_index = os.path.join(_MODULE_DIR, "roles.json")
 
 DEFAULT_ROLES = {
     "owner": {
+        "id": None,
         "description": "Server owner with ultimate permissions.",
-        "color": "#9400D3"
+        "color": "#9400D3",
+        "hoisted": True,
+        "permissions": ["administrator"],
+        "self_assignable": False,
+        "category": None,
+        "position": 0
     },
     "admin": {
+        "id": None,
         "description": "Administrator role with full permissions.",
-        "color": "#FF0000"
+        "color": "#FF0000",
+        "hoisted": True,
+        "permissions": [
+            "administrator",
+            "manage_roles", "manage_channels", "manage_users", "manage_server",
+            "manage_messages", "manage_threads", "manage_nicknames",
+            "kick_members", "ban_members",
+            "create_invite", "manage_invites",
+            "mention_everyone", "use_slash_commands"
+        ],
+        "self_assignable": False,
+        "category": None,
+        "position": 1
     },
     "moderator": {
+        "id": None,
         "description": "Moderator role with elevated permissions.",
-        "color": "#FFFF00"
+        "color": "#FFFF00",
+        "hoisted": True,
+        "permissions": [
+            "manage_messages", "manage_threads",
+            "kick_members", "manage_nicknames",
+            "mute_members", "deafen_members", "move_members",
+            "create_invite", "use_slash_commands"
+        ],
+        "self_assignable": False,
+        "category": None,
+        "position": 2
     },
     "user": {
+        "id": None,
         "description": "Regular user role with standard permissions.",
-        "color": "#FFFFFF"
+        "color": "#FFFFFF",
+        "hoisted": False,
+        "permissions": [
+            "send_messages", "read_message_history",
+            "add_reactions", "attach_files", "embed_links", "external_emojis",
+            "connect", "speak", "stream", "use_voice_activity",
+            "change_nickname", "create_invite", "use_slash_commands"
+        ],
+        "self_assignable": False,
+        "category": None,
+        "position": 3
     }
 }
 
+_lock = threading.RLock()
+_roles_cache: dict = {}
+_roles_loaded: bool = False
+
+
+def _load_roles() -> dict:
+    global _roles_cache, _roles_loaded
+    try:
+        with open(roles_index, "r") as f:
+            _roles_cache = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        _roles_cache = copy.deepcopy(DEFAULT_ROLES)
+        for role_name in _roles_cache:
+            _roles_cache[role_name]["id"] = str(uuid.uuid4())
+        _save_roles(_roles_cache)
+    _roles_loaded = True
+    return _roles_cache
+
+
+def reload_roles() -> dict:
+    global _roles_loaded
+    _roles_loaded = False
+    return _load_roles()
+
+
+def _save_roles(roles_dict: dict) -> None:
+    global _roles_cache, _roles_loaded
+    tmp = roles_index + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(roles_dict, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, roles_index)
+    _roles_cache = roles_dict
+    _roles_loaded = True
+
+
+def _get_roles_cache() -> dict:
+    if not _roles_loaded:
+        _load_roles()
+    return _roles_cache
+
+
+def _ensure_storage():
+    os.makedirs(_MODULE_DIR, exist_ok=True)
+    if not os.path.exists(roles_index):
+        default = copy.deepcopy(DEFAULT_ROLES)
+        for role_name in default:
+            default[role_name]["id"] = str(uuid.uuid4())
+        tmp = roles_index + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(default, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, roles_index)
+
+
+_ensure_storage()
+
 
 def get_role(role_id_or_name):
-    """Retrieve role data by role ID or name."""
-    init_db()
-
-    row = fetchone("SELECT * FROM roles WHERE id = ? OR name = ?", (role_id_or_name, role_id_or_name))
-    if not row:
+    with _lock:
+        roles = _get_roles_cache()
+        for role_name, role_data in roles.items():
+            if role_data.get("id") == role_id_or_name or role_name == role_id_or_name:
+                return copy.deepcopy(role_data)
         return None
-
-    return _process_role(row)
 
 
 def get_role_by_name(role_name):
-    """Retrieve role data by role name."""
-    init_db()
-
-    row = fetchone("SELECT * FROM roles WHERE name = ?", (role_name,))
-    if not row:
+    with _lock:
+        roles = _get_roles_cache()
+        if role_name in roles:
+            return copy.deepcopy(roles[role_name])
         return None
-
-    return _process_role(row)
 
 
 def get_role_by_id(role_id):
-    """Retrieve role data by role ID."""
-    init_db()
-
-    row = fetchone("SELECT * FROM roles WHERE id = ?", (role_id,))
-    if not row:
+    with _lock:
+        roles = _get_roles_cache()
+        for role_name, role_data in roles.items():
+            if role_data.get("id") == role_id:
+                return copy.deepcopy(role_data)
         return None
-
-    return _process_role(row)
 
 
 def count_roles() -> int:
-    """Count roles in database."""
-    init_db()
-
-    ret = fetchone("SELECT COUNT(*) as cnt FROM roles")
-
-    if ret is None:
-        return 0
-    return ret["cnt"]
+    with _lock:
+        return len(_get_roles_cache())
 
 
 def get_all_roles():
-    """Retrieve all roles from the database, ordered by position."""
-    init_db()
-
-    rows = fetchall("SELECT * FROM roles ORDER BY position ASC, name ASC")
-    return {row["name"]: _process_role(row) for row in rows}
-
-
-def _process_role(row):
-    """Convert database row to role dict."""
-    perms = _json_loads(row.get("permissions")) or []
-    if isinstance(perms, dict):
-        perms = []
-    return {
-        "id": row.get("id"),
-        "name": row["name"],
-        "description": row.get("description"),
-        "color": row.get("color"),
-        "hoisted": bool(row.get("hoisted", 0)),
-        "permissions": perms,
-        "self_assignable": bool(row.get("self_assignable", 0)),
-        "category": row.get("category"),
-        "position": row.get("position", 0) or 0
-    }
+    with _lock:
+        return copy.deepcopy(_get_roles_cache())
 
 
 def add_role(role_name, role_data):
-    """Add a new role to the database."""
-    init_db()
-
     with _lock:
-        existing = fetchone("SELECT id FROM roles WHERE name = ?", (role_name,))
-        if existing:
-            return existing["id"]
+        roles = _get_roles_cache()
+        if role_name in roles:
+            return roles[role_name].get("id")
 
         role_id = str(uuid.uuid4())
-        execute(
-            "INSERT INTO roles (id, name, description, color, hoisted, permissions, self_assignable, category) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (role_id,
-            role_name,
-            role_data.get("description"),
-            role_data.get("color"),
-            1 if role_data.get("hoisted") else 0,
-            _json_dumps(role_data.get("permissions", [])),
-            1 if role_data.get("self_assignable") else 0,
-            role_data.get("category"))
-        )
+        new_role = {
+            "id": role_id,
+            "description": role_data.get("description"),
+            "color": role_data.get("color"),
+            "hoisted": role_data.get("hoisted", False),
+            "permissions": role_data.get("permissions", []),
+            "self_assignable": role_data.get("self_assignable", False),
+            "category": role_data.get("category"),
+            "position": role_data.get("position", len(roles))
+        }
+        roles[role_name] = new_role
+        _save_roles(roles)
         return role_id
 
 
 def update_role(role_id_or_name, role_data):
-    """Update an existing role in the database."""
-    init_db()
-
     with _lock:
-        existing = fetchone("SELECT * FROM roles WHERE id = ? OR name = ?", (role_id_or_name, role_id_or_name))
-        if not existing:
-            return False
-
-        role_id = existing["id"]
-        execute(
-            "UPDATE roles SET name = ?, description = ?, color = ?, hoisted = ?, permissions = ?, self_assignable = ?, category = ? WHERE id = ?",
-            (role_data.get("name", existing["name"]),
-             role_data.get("description"),
-             role_data.get("color"),
-             1 if role_data.get("hoisted") else 0,
-             _json_dumps(role_data.get("permissions", [])),
-             1 if role_data.get("self_assignable") else 0,
-             role_data.get("category"),
-             role_id)
-        )
-        return True
+        roles = _get_roles_cache()
+        for role_name, data in roles.items():
+            if data.get("id") == role_id_or_name or role_name == role_id_or_name:
+                if "name" in role_data and role_data["name"] != role_name:
+                    roles[role_data["name"]] = roles.pop(role_name)
+                    role_name = role_data["name"]
+                roles[role_name].update({
+                    "description": role_data.get("description", roles[role_name].get("description")),
+                    "color": role_data.get("color", roles[role_name].get("color")),
+                    "hoisted": role_data.get("hoisted", roles[role_name].get("hoisted", False)),
+                    "permissions": role_data.get("permissions", roles[role_name].get("permissions", [])),
+                    "self_assignable": role_data.get("self_assignable", roles[role_name].get("self_assignable", False)),
+                    "category": role_data.get("category", roles[role_name].get("category")),
+                    "position": role_data.get("position", roles[role_name].get("position", 0))
+                })
+                _save_roles(roles)
+                return True
+        return False
 
 
 def update_role_key(role_id_or_name, key, value):
-    """Update a specific key in a role's data."""
-    init_db()
-
     with _lock:
-        role = fetchone("SELECT * FROM roles WHERE id = ? OR name = ?", (role_id_or_name, role_id_or_name))
-        if not role:
-            return False
-
-        role_data = _process_role(role)
-        role_data[key] = value
-
-        return update_role(role["id"], role_data)
+        roles = _get_roles_cache()
+        for role_name, role_data in roles.items():
+            if role_data.get("id") == role_id_or_name or role_name == role_id_or_name:
+                roles[role_name][key] = value
+                _save_roles(roles)
+                return True
+        return False
 
 
 def delete_role(role_id_or_name):
-    """Delete a role from the database."""
-    init_db()
-
     with _lock:
-        result = execute("DELETE FROM roles WHERE id = ? OR name = ?", (role_id_or_name, role_id_or_name))
-        return result.rowcount > 0
+        roles = _get_roles_cache()
+        for role_name, role_data in list(roles.items()):
+            if role_data.get("id") == role_id_or_name or role_name == role_id_or_name:
+                del roles[role_name]
+                _save_roles(roles)
+                return True
+        return False
 
 
 def role_exists(role_id_or_name):
-    """Check if a role exists in the database."""
-    init_db()
-
-    row = fetchone("SELECT id FROM roles WHERE id = ? OR name = ?", (role_id_or_name, role_id_or_name))
-    return row is not None
+    with _lock:
+        roles = _get_roles_cache()
+        for role_name, role_data in roles.items():
+            if role_data.get("id") == role_id_or_name or role_name == role_id_or_name:
+                return True
+        return False
 
 
 def add_role_permission(role_id_or_name, permission, value=True):
-    """Add or update a permission for a role."""
-    init_db()
-
     with _lock:
-        role = fetchone("SELECT * FROM roles WHERE id = ? OR name = ?", (role_id_or_name, role_id_or_name))
-        if not role:
-            return False
-
-        permissions = _json_loads(role.get("permissions")) or {}
-        permissions[permission] = value
-
-        execute(
-            "UPDATE roles SET permissions = ? WHERE id = ?",
-            (_json_dumps(permissions), role["id"])
-        )
-        return True
+        roles = _get_roles_cache()
+        for role_name, role_data in roles.items():
+            if role_data.get("id") == role_id_or_name or role_name == role_id_or_name:
+                permissions = role_data.get("permissions", [])
+                if isinstance(permissions, list):
+                    if permission not in permissions:
+                        permissions.append(permission)
+                        roles[role_name]["permissions"] = permissions
+                        _save_roles(roles)
+                return True
+        return False
 
 
 def get_role_permissions(role_id_or_name):
-    """Get all permissions for a role."""
     role_data = get_role(role_id_or_name)
     if role_data is None:
         return None
-    return role_data.get("permissions", {})
+    return role_data.get("permissions", [])
 
 
 def remove_role_permission(role_id_or_name, permission):
-    """Remove a permission from a role."""
-    init_db()
-
     with _lock:
-        role = fetchone("SELECT * FROM roles WHERE id = ? OR name = ?", (role_id_or_name, role_id_or_name))
-        if not role:
-            return False
-
-        permissions = _json_loads(role.get("permissions")) or {}
-        if permission not in permissions:
-            return False
-
-        del permissions[permission]
-        execute(
-            "UPDATE roles SET permissions = ? WHERE id = ?",
-            (_json_dumps(permissions), role["id"])
-        )
-        return True
+        roles = _get_roles_cache()
+        for role_name, role_data in roles.items():
+            if role_data.get("id") == role_id_or_name or role_name == role_id_or_name:
+                permissions = role_data.get("permissions", [])
+                if permission in permissions:
+                    permissions.remove(permission)
+                    roles[role_name]["permissions"] = permissions
+                    _save_roles(roles)
+                    return True
+        return False
 
 
 def can_role_mention_role(user_roles, target_role):
-    """Check if users with the given roles can mention the target role."""
     if "owner" in user_roles:
         return True
 
@@ -233,8 +282,13 @@ def can_role_mention_role(user_roles, target_role):
     if target_role_data is None:
         return True
 
-    permissions = target_role_data.get("permissions", {})
-    mention_permission = permissions.get("mention_roles")
+    permissions = target_role_data.get("permissions", [])
+
+    mention_permission = None
+    if isinstance(permissions, dict):
+        mention_permission = permissions.get("mention_roles")
+    elif isinstance(permissions, list):
+        pass
 
     if mention_permission is None:
         return True
@@ -252,15 +306,16 @@ def can_role_mention_role(user_roles, target_role):
 
 
 def get_hoisted_roles():
-    """Get all roles that are hoisted (displayed prominently)."""
-    init_db()
-
-    rows = fetchall("SELECT * FROM roles WHERE hoisted = 1")
-    return [{"name": row["name"], **_process_role(row)} for row in rows]
+    with _lock:
+        roles = _get_roles_cache()
+        result = []
+        for role_name, role_data in roles.items():
+            if role_data.get("hoisted"):
+                result.append({"name": role_name, **role_data})
+        return result
 
 
 def is_role_hoisted(role_id_or_name):
-    """Check if a role is hoisted."""
     role_data = get_role(role_id_or_name)
     if role_data is None:
         return False
@@ -268,7 +323,6 @@ def is_role_hoisted(role_id_or_name):
 
 
 def is_role_self_assignable(role_id_or_name):
-    """Check if a role is self-assignable."""
     role_data = get_role(role_id_or_name)
     if role_data is None:
         return False
@@ -276,61 +330,47 @@ def is_role_self_assignable(role_id_or_name):
 
 
 def get_self_assignable_roles():
-    """Get all roles that are self-assignable."""
-    init_db()
-
-    rows = fetchall("SELECT * FROM roles")
-    result = {}
-    for row in rows:
-        role_data = _process_role(row)
-        if role_data.get("self_assignable", False):
-            result[row["name"]] = role_data
-    return result
+    with _lock:
+        roles = _get_roles_cache()
+        result = {}
+        for role_name, role_data in roles.items():
+            if role_data.get("self_assignable", False):
+                result[role_name] = role_data
+        return result
 
 
 def set_role_self_assignable(role_id_or_name, value):
-    """Set whether a role is self-assignable."""
-    init_db()
-
     with _lock:
-        role = fetchone("SELECT * FROM roles WHERE id = ? OR name = ?", (role_id_or_name, role_id_or_name))
-        if not role:
-            return False
-
-        execute(
-            "UPDATE roles SET self_assignable = ? WHERE id = ?",
-            (1 if value else 0, role["id"])
-        )
-        return True
+        roles = _get_roles_cache()
+        for role_name, role_data in roles.items():
+            if role_data.get("id") == role_id_or_name or role_name == role_id_or_name:
+                roles[role_name]["self_assignable"] = value
+                _save_roles(roles)
+                return True
+        return False
 
 
 PROTECTED_ROLES = ["owner", "admin", "moderator"]
 
 
 def can_be_self_assignable(role_id_or_name):
-    """Check if a role can be made self-assignable."""
     role = get_role(role_id_or_name)
     if role:
         return role.get("name") not in PROTECTED_ROLES
     return role_id_or_name not in PROTECTED_ROLES
 
 
-def reload_roles():
-    """Reload roles from database (no-op for SQLite, kept for compatibility)."""
-    init_db()
-    return get_all_roles()
-
-
 def reorder_roles(role_order):
-    """Reorder roles by updating their positions."""
-    init_db()
-
     with _lock:
+        roles = _get_roles_cache()
         for i, role_id_or_name in enumerate(role_order):
-            if not role_exists(role_id_or_name):
+            found = False
+            for role_name, role_data in roles.items():
+                if role_data.get("id") == role_id_or_name or role_name == role_id_or_name:
+                    roles[role_name]["position"] = i
+                    found = True
+                    break
+            if not found:
                 return False
-            execute(
-                "UPDATE roles SET position = ? WHERE id = ? OR name = ?",
-                (i, role_id_or_name, role_id_or_name)
-            )
+        _save_roles(roles)
         return True

@@ -8,12 +8,13 @@ from handlers.websocket_utils import send_to_client
 
 
 class FileWatcher(FileSystemEventHandler):
-    """File system event handler for watching database files"""
+    """File system event handler for watching JSON/JSONL database files"""
 
     def __init__(self, broadcast_func, main_loop, connected_clients_getter, server_data_getter=None):
         self.broadcast_func = broadcast_func
         self.main_loop = main_loop
-        self.connected_clients_getter = server_data_getter
+        self.connected_clients_getter = connected_clients_getter
+        self.server_data_getter = server_data_getter
         self._users_cache = {}
         self._channels_cache = []
         self._roles_cache = {}
@@ -28,12 +29,13 @@ class FileWatcher(FileSystemEventHandler):
             self._users_cache = {}
 
         try:
-            self._channels_cache = channels._get_channels()
+            self._channels_cache = channels.get_all_channels()
         except Exception:
             self._channels_cache = []
 
         try:
-            self._roles_cache = {r["name"]: r for r in roles.get_all_roles()} if hasattr(roles, 'get_all_roles') else {}
+            all_roles = roles.get_all_roles()
+            self._roles_cache = {name: data for name, data in all_roles.items()} if all_roles else {}
         except Exception:
             self._roles_cache = {}
 
@@ -43,32 +45,78 @@ class FileWatcher(FileSystemEventHandler):
 
         filename = os.path.basename(event.src_path)
 
-        # Don't watch WAL/shm files - they change on every write
-        if filename.startswith('originchats.db-'):
-            return
-
-        if filename == 'originchats.db':
-            Logger.edit(f"Database file changed: {event.src_path}")
+        # Watch JSON files
+        if filename == 'users.json':
+            Logger.edit(f"Users file changed: {event.src_path}")
             asyncio.run_coroutine_threadsafe(
-                self._handle_database_change(),
+                self._handle_users_change(),
+                self.main_loop
+            )
+        elif filename == 'channels.json':
+            Logger.edit(f"Channels file changed: {event.src_path}")
+            asyncio.run_coroutine_threadsafe(
+                self._handle_channels_change(),
+                self.main_loop
+            )
+        elif filename == 'roles.json':
+            Logger.edit(f"Roles file changed: {event.src_path}")
+            asyncio.run_coroutine_threadsafe(
+                self._handle_roles_change(),
                 self.main_loop
             )
 
-    async def _handle_database_change(self):
-        # Don't broadcast users_list on every DB change - too noisy
-        # Only broadcast specific changes when needed
-        pass
+    def on_created(self, event):
+        """Handle file creation events (new channel files)"""
+        if event.is_directory:
+            return
+
+        dirname = os.path.basename(os.path.dirname(event.src_path))
+        filename = os.path.basename(event.src_path)
+
+        # Watch for new channel JSONL files
+        if dirname == 'channels' and filename.endswith('.json'):
+            Logger.success(f"New channel file created: {filename}")
+            asyncio.run_coroutine_threadsafe(
+                self._handle_channels_change(),
+                self.main_loop
+            )
 
     async def _handle_users_change(self):
-        pass
+        """Handle users.json change"""
+        try:
+            self._broadcast_nickname_changes()
+        except Exception as e:
+            Logger.error(f"Error handling users change: {e}")
 
     async def _handle_roles_change(self):
-        pass
+        """Handle roles.json change"""
+        try:
+            old_roles = self._roles_cache
+            roles.reload_roles()
+            new_roles = roles.get_all_roles()
+            self._roles_cache = {name: data for name, data in new_roles.items()} if new_roles else {}
+
+            # Broadcast roles_list to all connected clients
+            connected_clients = self.connected_clients_getter()
+            server_data = self.server_data_getter() if self.server_data_getter else {}
+
+            for ws in connected_clients.copy():
+                try:
+                    await send_to_client(ws, {
+                        "cmd": "roles_list",
+                        "val": new_roles
+                    })
+                except Exception:
+                    pass
+
+            Logger.info(f"Roles updated: {len(new_roles)} roles")
+        except Exception as e:
+            Logger.error(f"Error handling roles change: {e}")
 
     async def _handle_channels_change(self):
         """Handle channels change"""
         try:
-            channels._load_channels_index()
+            channels.reload_channels()
 
             connected_clients = self.connected_clients_getter()
             disconnected = set()
@@ -154,6 +202,11 @@ def setup_file_watchers(broadcast_func, main_loop, connected_clients_getter, ser
 
     observer = Observer()
     observer.schedule(event_handler, db_dir, recursive=False)
+
+    # Also watch the channels subdirectory for new channel files
+    channels_dir = os.path.join(db_dir, 'channels')
+    if os.path.exists(channels_dir):
+        observer.schedule(event_handler, channels_dir, recursive=False)
 
     observer.start()
     Logger.success(f"File watcher started for directory: {db_dir}")

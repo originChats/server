@@ -4,7 +4,7 @@ from schemas.server_emoji_schema import Emoji_add, Emoji_delete, Emoji_get_all, 
 from handlers.messages.helpers import _error, _require_user_id, _require_permission
 
 
-def handle_emoji_add(ws, message, match_cmd):
+async def handle_emoji_add(ws, message, match_cmd):
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
@@ -52,7 +52,7 @@ def handle_emoji_get_all(ws, message, match_cmd):
         return _error(f"Invalid emoji_get_all command scheme: {str(e)}", match_cmd)
 
 
-def handle_emoji_update(ws, message, match_cmd):
+async def handle_emoji_update(ws, message, match_cmd):
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
@@ -77,7 +77,7 @@ def handle_emoji_update(ws, message, match_cmd):
         return _error(f"Invalid emoji_update command scheme: {str(e)}", match_cmd)
 
 
-def handle_emoji_get_filename(ws, message, match_cmd):
+async def handle_emoji_get_filename(ws, message, match_cmd):
     _, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
@@ -97,7 +97,7 @@ def handle_emoji_get_filename(ws, message, match_cmd):
         return _error(f"Invalid emoji_get_filename command scheme: {str(e)}", match_cmd)
 
 
-def handle_emoji_get_id(ws, message, match_cmd):
+async def handle_emoji_get_id(ws, message, match_cmd):
     _, error = _require_user_id(ws, "Authentication required")
     if error:
         return error

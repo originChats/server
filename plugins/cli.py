@@ -231,9 +231,25 @@ class ChannelCommands:
         """
         if len(args) < 4:
             return handler.error("Usage: channel_setpermissions [name] [role] [permission] [allow]")
-        
+
         name, role, permission, allow = args[0], args[1], args[2], args[3]
-        if not channels.set_channel_permissions(name, role, permission, allow):
+        channel = channels.get_channel(name)
+        if not channel:
+            handler.error(f"Channel '{name}' not found")
+            return
+        perms = channel.get("permissions", {})
+        if permission not in ["view", "send", "delete", "delete_own", "edit_own", "react", "pin"]:
+            handler.error(f"Unknown permission: {permission}")
+            return
+        perm_list = perms.get(permission, [])
+        if allow.lower() in ["true", "yes", "1", "allow"]:
+            if role not in perm_list:
+                perm_list.append(role)
+        else:
+            if role in perm_list:
+                perm_list.remove(role)
+        perms[permission] = perm_list
+        if not channels.set_channel_permissions(name, perms):
             handler.error(f"Failed to set permissions for role '{role}' on channel '{name}'")
         else:
             handler.success(f"Set permissions for role '{role}' on channel '{name}'")

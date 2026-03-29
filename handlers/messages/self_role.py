@@ -28,7 +28,7 @@ async def handle_self_role_add(ws, message, match_cmd, server_data):
 
     username = users.get_username_by_id(user_id)
     updated_roles = users.get_user_roles(user_id)
-    
+
     color = None
     if updated_roles:
         first_role_data = roles.get_role(updated_roles[0])
@@ -81,7 +81,7 @@ async def handle_self_role_remove(ws, message, match_cmd, server_data):
 
     username = users.get_username_by_id(user_id)
     updated_roles = users.get_user_roles(user_id)
-    
+
     color = None
     if updated_roles:
         first_role_data = roles.get_role(updated_roles[0])
@@ -109,7 +109,7 @@ async def handle_self_role_remove(ws, message, match_cmd, server_data):
     }
 
 
-def handle_self_roles_list(ws, message, match_cmd):
+async def handle_self_roles_list(ws, message, match_cmd):
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error

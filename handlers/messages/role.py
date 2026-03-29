@@ -86,11 +86,11 @@ async def handle_role_update(ws, message, match_cmd, server_data):
     error = _require_permission(user_id, "manage_roles", match_cmd)
     if error:
         return error
-    
+
     role_id_or_name = message.get("id") or message.get("name")
     if not role_id_or_name:
         return _error("Role id or name is required", match_cmd)
-    
+
     error = _require_can_manage_role(user_id, role_id_or_name, match_cmd)
     if error:
         return error
@@ -151,11 +151,11 @@ async def handle_role_set(ws, message, match_cmd, server_data):
     error = _require_permission(user_id, "manage_roles", match_cmd)
     if error:
         return error
-    
+
     role_id_or_name = message.get("id") or message.get("name")
     if not role_id_or_name:
         return _error("Role id or name is required", match_cmd)
-    
+
     error = _require_can_manage_role(user_id, role_id_or_name, match_cmd)
     if error:
         return error
@@ -169,7 +169,10 @@ async def handle_role_set(ws, message, match_cmd, server_data):
 
     updated = roles.update_role(role_id_or_name, role_data)
     role = roles.get_role(role_id_or_name)
-    
+
+    if not role:
+        return _error("Role not found after update", match_cmd)
+
     if server_data:
         server_data["plugin_manager"].trigger_event("role_update", ws, {
             "role_id": role.get("id"),
@@ -193,21 +196,21 @@ async def handle_role_delete(ws, message, match_cmd, server_data):
     error = _require_permission(user_id, "manage_roles", match_cmd)
     if error:
         return error
-    
+
     role_id_or_name = message.get("id") or message.get("name")
     if not role_id_or_name:
         return _error("Role id or name is required", match_cmd)
-    
+
     role = roles.get_role(role_id_or_name)
     if not role:
         return _error("Role not found", match_cmd)
-    
+
     error = _require_can_manage_role(user_id, role.get("name"), match_cmd)
     if error:
         return error
-    
+
     role_name = role.get("name")
-    
+
     if role_name in ["owner", "admin", "user"]:
         return _error("Cannot delete system roles", match_cmd)
 
@@ -251,11 +254,11 @@ def handle_role_permissions_set(ws, message, match_cmd):
     error = _require_permission(user_id, "manage_roles", match_cmd)
     if error:
         return error
-    
+
     role_id_or_name = message.get("id") or message.get("name")
     if not role_id_or_name:
         return _error("Role id or name is required", match_cmd)
-    
+
     error = _require_can_manage_role(user_id, role_id_or_name, match_cmd)
     if error:
         return error
@@ -263,20 +266,20 @@ def handle_role_permissions_set(ws, message, match_cmd):
     if not roles.role_exists(role_id_or_name):
         return _error("Role not found", match_cmd)
 
-    permissions = message.get("permissions")
-    if not isinstance(permissions, list):
+    perms = message.get("permissions")
+    if not isinstance(perms, list):
         return _error("Permissions must be an array", match_cmd)
 
     role_data = roles.get_role(role_id_or_name)
     if not role_data:
         return _error("Role not found", match_cmd)
-    role_data["permissions"] = permissions
+    role_data["permissions"] = perms
     updated = roles.update_role(role_id_or_name, role_data)
 
-    return {"cmd": "role_permissions_set", "id": role_data.get("id"), "name": role_data.get("name"), "permissions": permissions, "updated": updated}
+    return {"cmd": "role_permissions_set", "id": role_data.get("id"), "name": role_data.get("name"), "permissions": perms, "updated": updated}
 
 
-def handle_role_permissions_get(ws, message, match_cmd):
+async def handle_role_permissions_get(ws, message, match_cmd):
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
@@ -290,4 +293,6 @@ def handle_role_permissions_get(ws, message, match_cmd):
 
     role_perms = roles.get_role_permissions(role_id_or_name)
     role = roles.get_role(role_id_or_name)
+    if not role:
+        return _error("Role not found", match_cmd)
     return {"cmd": "role_permissions_get", "id": role.get("id"), "name": role.get("name"), "permissions": role_perms}

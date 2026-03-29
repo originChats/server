@@ -1,4 +1,3 @@
-import asyncio
 from db import channels, users, threads
 from handlers.websocket_utils import _get_ws_attr
 
@@ -16,7 +15,7 @@ def _require_user_id(ws, error_message: str = "User not authenticated"):
     return user_id, None
 
 
-def _require_user_roles(user_id, *, requiredRoles=[], forbiddenRoles=[], missing_roles_message="User roles not found"):
+async def _require_user_roles(user_id, *, requiredRoles=[], forbiddenRoles=[], missing_roles_message="User roles not found"):
     user_roles = users.get_user_roles(user_id)
     for role in requiredRoles:
         if not user_roles or role not in user_roles:
@@ -31,7 +30,10 @@ async def handle_react_add(ws, message, match_cmd, _get_channel_or_thread_contex
     if error:
         return error
 
-    user_roles, error = _require_user_roles(user_id)
+    if not user_id:
+        return _error("User ID is required", match_cmd)
+
+    user_roles, error = await _require_user_roles(user_id)
     if error:
         return error
 
@@ -61,13 +63,13 @@ async def handle_react_add(ws, message, match_cmd, _get_channel_or_thread_contex
         msg_obj = threads.get_thread_message(thread_id, message_id)
         if not msg_obj:
             return _error("Message not found", match_cmd)
-        success = await asyncio.to_thread(threads.add_thread_reaction, thread_id, message_id, emoji_str, user_id)
+        success = threads.add_thread_reaction(thread_id, message_id, emoji_str, user_id)
         if not success:
             return _error("Failed to add reaction", match_cmd)
         username = users.get_username_by_id(user_id)
         return {"cmd": "message_react_add", "id": message_id, "emoji": emoji_str, "channel": parent_channel, "thread_id": thread_id, "from": username, "global": True}
     else:
-        success = await asyncio.to_thread(channels.add_reaction, channel_name, message_id, emoji_str, user_id)
+        success = channels.add_reaction(channel_name, message_id, emoji_str, user_id)
         if not success:
             return _error("Failed to add reaction", match_cmd)
         username = users.get_username_by_id(user_id)
@@ -79,6 +81,9 @@ async def handle_react_remove(ws, message, match_cmd, _get_channel_or_thread_con
     if error:
         return error
 
+    if not user_id:
+        return _error("User ID is required", match_cmd)
+
     channel_name = message.get("channel")
     thread_id = message.get("thread_id")
     message_id = message.get("id")
@@ -87,7 +92,7 @@ async def handle_react_remove(ws, message, match_cmd, _get_channel_or_thread_con
     if not message_id or not emoji_str:
         return _error("Message ID and emoji are required", match_cmd)
 
-    user_roles, error = _require_user_roles(user_id)
+    user_roles, error = await _require_user_roles(user_id)
     if error:
         return error
 
@@ -109,13 +114,13 @@ async def handle_react_remove(ws, message, match_cmd, _get_channel_or_thread_con
         msg_obj = threads.get_thread_message(thread_id, message_id)
         if not msg_obj:
             return _error("Message not found", match_cmd)
-        success = await asyncio.to_thread(threads.remove_thread_reaction, thread_id, message_id, emoji_str, user_id)
+        success = threads.remove_thread_reaction(thread_id, message_id, emoji_str, user_id)
         if not success:
             return _error("Failed to remove reaction", match_cmd)
         username = users.get_username_by_id(user_id)
         return {"cmd": "message_react_remove", "id": message_id, "emoji": emoji_str, "channel": parent_channel, "thread_id": thread_id, "from": username, "global": True}
     else:
-        success = await asyncio.to_thread(channels.remove_reaction, channel_name, message_id, emoji_str, user_id)
+        success = channels.remove_reaction(channel_name, message_id, emoji_str, user_id)
         if not success:
             return _error("Failed to remove reaction", match_cmd)
         username = users.get_username_by_id(user_id)

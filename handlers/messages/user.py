@@ -43,6 +43,8 @@ async def handle_user_update(ws, message, match_cmd, server_data):
             return _error("Nickname must be a string or null", match_cmd)
 
     target_user = users.get_user(target_id)
+    if not target_user:
+        return _error("Target user not found", match_cmd)
     new_username = target_user.get("username")
     new_nickname = target_user.get("nickname")
 
