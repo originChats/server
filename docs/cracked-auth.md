@@ -77,7 +77,8 @@ Followed by:
 {
   "cmd": "ready",
   "user": {
-    "username": "alice",
+    "username": "USR:local_alice",
+    "nickname": "alice",
     "roles": ["user"],
     "cracked": true,
     ...
@@ -167,10 +168,11 @@ Cracked users have `cracked: true` in their user object:
 
 ```json
 {
-  "username": "alice",
+  "username": "USR:local_alice",
+  "nickname": "alice",
   "roles": ["user"],
   "cracked": true,
-  "pfp_url": "https://example.com/avatar.png",
+  "pfp": "https://example.com/avatar.png",
   "status": {
     "status": "online",
     "text": ""
@@ -178,11 +180,17 @@ Cracked users have `cracked: true` in their user object:
 }
 ```
 
+**Note:** For cracked users:
+- `username` includes the prefix (e.g., `USR:local_alice`)
+- `nickname` is set to the raw username (e.g., `alice`) for display purposes
+- Clients should display `nickname` if present, otherwise `username`
+- Login/register uses the raw username without prefix
+
 ## User IDs
 
-Cracked users have IDs in the format `USR:local_{username}`.
+Internally, cracked users have IDs in the format `USR:local_{username}`.
 
-For example, user `alice` has ID `USR:local_alice`.
+For example, user `alice` has internal ID `USR:local_alice`.
 
 ## Username Rules
 

@@ -132,14 +132,20 @@ def get_users():
             user_status = user_data.get("status", DEFAULT_STATUS)
             username = user_data.get("username", user_id)
             nickname = user_data.get("nickname")
+            pfp_url = user_data.get("pfp_url")
+            is_cracked = user_id.startswith(CRACKED_USER_PREFIX)
 
-            user_arr.append({
-                "username": username,
-                "nickname": nickname,
-                "roles": list(user_roles),
-                "color": color,
-                "status": user_status
-            })
+            user_arr.append(
+                {
+                    "username": username,
+                    "nickname": nickname,
+                    "roles": list(user_roles),
+                    "color": color,
+                    "status": user_status,
+                    "cracked": is_cracked,
+                    "pfp": pfp_url,
+                }
+            )
 
         return user_arr
 
@@ -369,26 +375,33 @@ CRACKED_USER_PREFIX = "USR:local_"
 
 
 def _hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def _verify_password(password: str, password_hash: str) -> bool:
     try:
-        return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
+        return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
     except Exception:
         return False
 
 
-def register_cracked_user(username: str, password: str, default_roles: list | None = None) -> tuple[bool, str | None, str | None]:
+def register_cracked_user(
+    username: str, password: str, default_roles: list | None = None
+) -> tuple[bool, str | None, str | None]:
     username = username.strip().lower()
     if not username or len(username) < 2 or len(username) > 32:
         return False, None, "Username must be 2-32 characters"
     if not password or len(password) < 4 or len(password) > 72:
         return False, None, "Password must be 4-72 characters"
     if not username.replace("_", "").replace("-", "").isalnum():
-        return False, None, "Username can only contain letters, numbers, hyphens, and underscores"
-    
+        return (
+            False,
+            None,
+            "Username can only contain letters, numbers, hyphens, and underscores",
+        )
+
     user_id = f"{CRACKED_USER_PREFIX}{username}"
+    full_username = f"USR:local_{username}"
 
     with _lock:
         users = _get_users_cache()
@@ -396,30 +409,34 @@ def register_cracked_user(username: str, password: str, default_roles: list | No
             return False, None, "Username already taken"
 
         for existing_id, existing_data in users.items():
-            if existing_data.get("username", "").lower() == username:
+            if existing_data.get("username", "").lower() == full_username.lower():
                 return False, None, "Username already taken"
 
         password_hash = _hash_password(password)
 
         user_data = {
-            "username": username,
+            "username": full_username,
+            "nickname": username,
             "password_hash": password_hash,
             "roles": default_roles or ["user"],
             "status": DEFAULT_STATUS,
-            "pfp_url": None
+            "pfp_url": None,
         }
         users[user_id] = user_data
         _save_users(users)
         return True, user_id, None
 
 
-def authenticate_cracked_user(username: str, password: str) -> tuple[bool, str | None, str | None]:
+def authenticate_cracked_user(
+    username: str, password: str
+) -> tuple[bool, str | None, str | None]:
     username = username.strip().lower()
-    
+    full_username = f"USR:local_{username}"
+
     with _lock:
         users = _get_users_cache()
         for user_id, user_data in users.items():
-            if user_data.get("username", "").lower() == username:
+            if user_data.get("username", "").lower() == full_username.lower():
                 if user_id.startswith(CRACKED_USER_PREFIX):
                     if _verify_password(password, user_data.get("password_hash", "")):
                         return True, user_id, None
@@ -459,10 +476,7 @@ def set_status(user_id, status, text=None):
         if user_id not in users:
             return False
 
-        status_data = {
-            "status": status,
-            "text": text[:100] if text else ""
-        }
+        status_data = {"status": status, "text": text[:100] if text else ""}
         users[user_id]["status"] = status_data
         _save_users(users)
         return True

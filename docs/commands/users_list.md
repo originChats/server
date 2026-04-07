@@ -19,7 +19,9 @@
         "status": "online",
         "text": "Working on something cool"
       },
-      "roles": ["role1", "role2"]
+      "roles": ["role1", "role2"],
+      "cracked": false,
+      "pfp": "https://example.com/avatar.png"
     }
   ]
 }
@@ -37,6 +39,8 @@ interface User {
     status: "online" | "idle" | "dnd" | "offline";
     text?: string;
   };
+  cracked: boolean;
+  pfp?: string | null;
 }
 
 interface UsersList {
@@ -51,6 +55,8 @@ interface UsersList {
 - `color` - The user's top role colour
 - `status` - Object containing `status` (online/idle/dnd/invisible) and `text` (custom message)
 - `roles` - Array of role names assigned to the user
+- `cracked` - Boolean indicating if the account uses cracked (local) authentication
+- `pfp` - Profile picture URL (optional, may be null for Rotur users or if not set for cracked users)
 
 **Notes:**
 - User must be authenticated.
