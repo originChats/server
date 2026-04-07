@@ -6,29 +6,24 @@ import json
 from db import channels, users, roles
 from handlers.websocket_utils import broadcast_to_all, send_to_client, _get_ws_attr
 from logger import Logger
+from plugins.plugin_utils import load_plugin_config, save_plugin_config
 
 
-# Load configuration
+DEFAULT_CONFIG = {
+    "enabled": True,
+    "timeout_duration": 300,
+    "blocked_words": [],
+    "send_mod_message": True,
+    "mod_message": "{username} was automatically timed out for violating chat rules.",
+    "delete_message": True
+}
+
+
 def load_config():
-    config_path = os.path.join(os.path.dirname(__file__), "automod_config.json")
-    try:
-        with open(config_path, "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        Logger.warning("AutoMod config not found, using defaults")
-        return {
-            "enabled": True,
-            "timeout_duration": 300,
-            "blocked_words": [],
-            "send_mod_message": True,
-            "mod_message": "{username} was automatically timed out for violating chat rules.",
-            "delete_message": True
-        }
+    return load_plugin_config("automod_config.json", DEFAULT_CONFIG)
 
 def save_config(config):
-    config_path = os.path.join(os.path.dirname(__file__), "automod_config.json")
-    with open(config_path, "w") as f:
-        json.dump(config, f, indent=2)
+    save_plugin_config("automod_config.json", config)
 
 CONFIG = load_config()
 BLOCKED_WORDS = CONFIG.get("blocked_words", [])

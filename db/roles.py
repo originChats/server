@@ -4,6 +4,8 @@ import os
 import threading
 import uuid
 
+from constants import PROTECTED_ROLES
+
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 roles_index = os.path.join(_MODULE_DIR, "roles.json")
 
@@ -90,6 +92,13 @@ def reload_roles() -> dict:
     global _roles_loaded
     _roles_loaded = False
     return _load_roles()
+
+
+def get_user_color(user_roles: list) -> str | None:
+    if not user_roles:
+        return None
+    first_role_data = get_role(user_roles[0])
+    return first_role_data.get("color") if first_role_data else None
 
 
 def _save_roles(roles_dict: dict) -> None:
@@ -348,9 +357,6 @@ def set_role_self_assignable(role_id_or_name, value):
                 _save_roles(roles)
                 return True
         return False
-
-
-PROTECTED_ROLES = ["owner", "admin", "moderator"]
 
 
 def can_be_self_assignable(role_id_or_name):

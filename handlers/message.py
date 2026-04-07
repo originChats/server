@@ -10,7 +10,7 @@ from handlers.messages.channel import handle_channels_get, handle_channel_create
 from handlers.messages.rate_limit import handle_rate_limit_status, handle_rate_limit_reset
 from handlers.messages.status import handle_status_set, handle_status_get
 from handlers.messages.reaction import handle_react_add, handle_react_remove
-from handlers.messages.user import handle_user_update
+from handlers.messages.user import handle_user_update, handle_pfp_set, handle_pfp_get
 from handlers.messages.server import handle_server_update, handle_server_info
 from handlers.messages.poll import handle_poll_create, handle_poll_vote, handle_poll_end, handle_poll_results, handle_poll_get
 from handlers.messages.helpers import _require_permission
@@ -52,7 +52,7 @@ async def _broadcast_voice_event(connected_clients, voice_channels, channel_name
     await broadcast_to_voice_channel_with_viewers(connected_clients, voice_channels, msg, msg, channel_name)
 
 
-async def handle(ws, message, server_data: dict):
+async def handle(ws, message, server_data: dict) -> dict | None:
     if not isinstance(message, dict):
         return _error(f"Invalid message format: expected a dictionary, got {type(message).__name__}", None)
 
@@ -105,7 +105,7 @@ async def handle(ws, message, server_data: dict):
         case "status_set":
             return await handle_status_set(ws, message, match_cmd, server_data)
         case "status_get":
-            return handle_status_get(ws, message, match_cmd, server_data)
+            return await handle_status_get(ws, message, match_cmd, server_data)
         case "users_online":
             return _handle_users_online(ws, message, server_data)
         case "plugins_list":
@@ -113,9 +113,9 @@ async def handle(ws, message, server_data: dict):
         case "plugins_reload":
             return _handle_plugins_reload(ws, message, match_cmd, server_data)
         case "rate_limit_status":
-            return handle_rate_limit_status(ws, message, match_cmd, server_data)
+            return await handle_rate_limit_status(ws, message, match_cmd, server_data)
         case "rate_limit_reset":
-            return handle_rate_limit_reset(ws, message, match_cmd, server_data)
+            return await handle_rate_limit_reset(ws, message, match_cmd, server_data)
         case "slash_register":
             return await handle_slash_register(ws, message, match_cmd, server_data)
         case "slash_list":
@@ -147,13 +147,13 @@ async def handle(ws, message, server_data: dict):
         case "role_permissions_set":
             return handle_role_permissions_set(ws, message, match_cmd)
         case "role_permissions_get":
-            return handle_role_permissions_get(ws, message, match_cmd)
+            return await handle_role_permissions_get(ws, message, match_cmd)
         case "self_role_add":
             return await handle_self_role_add(ws, message, match_cmd, server_data)
         case "self_role_remove":
             return await handle_self_role_remove(ws, message, match_cmd, server_data)
         case "self_roles_list":
-            return handle_self_roles_list(ws, message, match_cmd)
+            return await handle_self_roles_list(ws, message, match_cmd)
         case "channel_create":
             return handle_channel_create(ws, message, match_cmd, server_data)
         case "channel_update":
@@ -177,21 +177,21 @@ async def handle(ws, message, server_data: dict):
         case "pings_get":
             return await _handle_pings_get(ws, message, match_cmd)
         case "emoji_add":
-            return handle_emoji_add(ws, message, match_cmd)
+            return await handle_emoji_add(ws, message, match_cmd)
         case "emoji_delete":
             return handle_emoji_delete(ws, message, match_cmd)
         case "emoji_get_all":
             return handle_emoji_get_all(ws, message, match_cmd)
         case "emoji_update":
-            return handle_emoji_update(ws, message, match_cmd)
+            return await handle_emoji_update(ws, message, match_cmd)
         case "emoji_get_filename":
-            return handle_emoji_get_filename(ws, message, match_cmd)
+            return await handle_emoji_get_filename(ws, message, match_cmd)
         case "emoji_get_id":
-            return handle_emoji_get_id(ws, message, match_cmd)
+            return await handle_emoji_get_id(ws, message, match_cmd)
         case "attachment_delete":
-            return handle_attachment_delete(ws, message, server_data, match_cmd)
+            return await handle_attachment_delete(ws, message, server_data, match_cmd)
         case "attachment_get":
-            return handle_attachment_get(ws, message, server_data, match_cmd)
+            return await handle_attachment_get(ws, message, server_data, match_cmd)
         case "push_get_vapid":
             return await push_handler.handle_push_get_vapid(ws)
         case "push_subscribe":
@@ -213,17 +213,17 @@ async def handle(ws, message, server_data: dict):
         case "thread_leave":
             return _handle_thread_leave(ws, message, match_cmd)
         case "webhook_create":
-            return handle_webhook_create(ws, message, match_cmd)
+            return await handle_webhook_create(ws, message, match_cmd)
         case "webhook_get":
-            return handle_webhook_get(ws, message, match_cmd)
+            return await handle_webhook_get(ws, message, match_cmd)
         case "webhook_list":
-            return handle_webhook_list(ws, message, match_cmd)
+            return await handle_webhook_list(ws, message, match_cmd)
         case "webhook_delete":
-            return handle_webhook_delete(ws, message, match_cmd)
+            return await handle_webhook_delete(ws, message, match_cmd)
         case "webhook_update":
-            return handle_webhook_update(ws, message, match_cmd)
+            return await handle_webhook_update(ws, message, match_cmd)
         case "webhook_regenerate":
-            return handle_webhook_regenerate(ws, message, match_cmd)
+            return await handle_webhook_regenerate(ws, message, match_cmd)
         case "embeds_list":
             return _handle_embeds_list(ws, message, match_cmd)
         case "poll_create":
@@ -233,9 +233,13 @@ async def handle(ws, message, server_data: dict):
         case "poll_end":
             return await handle_poll_end(ws, message, match_cmd, server_data)
         case "poll_results":
-            return handle_poll_results(ws, message, match_cmd)
+            return await handle_poll_results(ws, message, match_cmd)
         case "poll_get":
-            return handle_poll_get(ws, message, match_cmd)
+            return await handle_poll_get(ws, message, match_cmd)
+        case "pfp_set":
+            return await handle_pfp_set(ws, message, server_data)
+        case "pfp_get":
+            return await handle_pfp_get(ws, message, server_data)
         case _:
             return _error(f"Unknown command: {message.get('cmd')}", match_cmd)
 
@@ -358,7 +362,7 @@ def _handle_users_online(ws, message, server_data):
     if error:
         return error
     if not server_data or "connected_clients" not in server_data:
-        return _error("Server data not available", match_cmd)
+        return _error("Server data not available", "users_online")
 
     online_users = []
     _ws_data_all = server_data.get("_ws_data", {})
@@ -376,11 +380,7 @@ def _handle_users_online(ws, message, server_data):
         if user_status.get("status") == "invisible":
             continue
         user_roles = user_data.get("roles", [])
-        color = None
-        if user_roles:
-            first_role_data = roles.get_role(user_roles[0])
-            if first_role_data:
-                color = first_role_data.get("color")
+        color = roles.get_user_color(user_roles)
         username = user_data.get("username", client_user_id)
         online_users.append({
             "username": username, "nickname": user_data.get("nickname"),
@@ -548,11 +548,7 @@ async def _handle_user_roles_set(ws, message, match_cmd, server_data):
     users.set_user_roles(target_id, roles_to_set)
     updated_user = users.get_user(target_id)
     username = users.get_username_by_id(target_id)
-    color = None
-    if roles_to_set:
-        first_role_data = roles.get_role(roles_to_set[0])
-        if first_role_data:
-            color = first_role_data.get("color")
+    color = roles.get_user_color(roles_to_set)
     if server_data:
         server_data["plugin_manager"].trigger_event("user_roles_set", ws, {
             "user_id": target_id, "username": username, "roles": roles_to_set
@@ -574,11 +570,7 @@ def _handle_user_roles_get(ws, message, match_cmd):
         return _error("User not found", match_cmd)
     user_roles = users.get_user_roles(target_id)
     username = users.get_username_by_id(target_id)
-    color = None
-    if user_roles:
-        first_role_data = roles.get_role(user_roles[0])
-        if first_role_data:
-            color = first_role_data.get("color")
+    color = roles.get_user_color(user_roles)
     return {"cmd": "user_roles_get", "user": username, "roles": user_roles, "color": color}
 
 
@@ -646,6 +638,8 @@ def _handle_thread_create(ws, message, match_cmd):
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
+    if not user_id:
+        return _error("User ID is required", match_cmd)
     channel_name = message.get("channel")
     thread_name = message.get("name")
     if not channel_name or not thread_name:
@@ -715,6 +709,8 @@ def _handle_thread_delete(ws, message, match_cmd):
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
+    if not user_id:
+        return _error("User ID is required", match_cmd)
     thread_id = message.get("thread_id")
     if not thread_id:
         return _error("Thread ID is required", match_cmd)
@@ -736,6 +732,8 @@ def _handle_thread_update(ws, message, match_cmd):
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
+    if not user_id:
+        return _error("User ID is required", match_cmd)
     thread_id = message.get("thread_id")
     if not thread_id:
         return _error("Thread ID is required", match_cmd)
@@ -770,6 +768,8 @@ def _handle_thread_join(ws, message, match_cmd):
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
+    if not user_id:
+        return _error("User ID is required", match_cmd)
     thread_id = message.get("thread_id")
     if not thread_id:
         return _error("Thread ID is required", match_cmd)
@@ -796,6 +796,8 @@ def _handle_thread_leave(ws, message, match_cmd):
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return error
+    if not user_id:
+        return _error("User ID is required", match_cmd)
     thread_id = message.get("thread_id")
     if not thread_id:
         return _error("Thread ID is required", match_cmd)

@@ -74,7 +74,7 @@ class FileWatcher(FileSystemEventHandler):
         filename = os.path.basename(event.src_path)
 
         # Watch for new channel JSONL files
-        if dirname == 'channels' and filename.endswith('.json'):
+        if dirname == 'channels' and str(filename).endswith('.json'):  # type: ignore
             Logger.success(f"New channel file created: {filename}")
             asyncio.run_coroutine_threadsafe(
                 self._handle_channels_change(),

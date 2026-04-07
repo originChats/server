@@ -11,6 +11,13 @@ from typing import Dict, List, Optional, Tuple
 from . import users
 from .emoji_utils import is_valid_emoji
 from .shared import convert_messages_to_user_format
+from .storage_utils import (
+    find_line_number_grep,
+    count_lines_wc,
+    read_lines_range,
+    get_messages_around_from_file,
+    build_id_index,
+)
 
 _IS_WINDOWS = platform.system() == "Windows"
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -61,10 +68,6 @@ def _save_thread_metadata(thread_id: str, metadata: dict) -> None:
     os.replace(tmp, thread_file)
 
 
-def _build_id_index(messages):
-    return {msg["id"]: i for i, msg in enumerate(messages) if "id" in msg}
-
-
 def _load_thread_messages(thread_id: str) -> dict:
     messages_file = _get_messages_file_path(thread_id)
     messages = []
@@ -106,7 +109,7 @@ def _load_thread_messages(thread_id: str) -> dict:
 
     return {
         "messages": messages,
-        "id_to_idx": _build_id_index(messages),
+        "id_to_idx": build_id_index(messages),
         "offsets": offsets,
         "lengths": lengths,
     }
@@ -307,7 +310,7 @@ def delete_thread_message(thread_id: str, message_id: str) -> bool:
         return False
 
     messages.pop(idx)
-    cache["id_to_idx"] = _build_id_index(messages)
+    cache["id_to_idx"] = build_id_index(messages)
     _full_rewrite_messages(thread_id)
     return True
 
@@ -526,121 +529,7 @@ def leave_thread(thread_id: str, user_id: str) -> bool:
 
 def get_thread_messages_around(thread_id: str, message_id: str, above: int = 50, below: int = 50) -> Tuple[Optional[List[dict]], Optional[int], Optional[int]]:
     messages_file = _get_messages_file_path(thread_id)
-    return _get_messages_around_from_file(messages_file, message_id, above, below)
-
-
-def _find_line_number_grep(file_path: str, search_pattern: str) -> Optional[int]:
-    """Use grep to find line number of a pattern. Returns 0-indexed line number."""
-    if _IS_WINDOWS:
-        return None
-    try:
-        result = subprocess.run(
-            ["grep", "-n", "-F", search_pattern, file_path],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if result.returncode == 0 and result.stdout:
-            first_match = result.stdout.split("\n")[0]
-            if ":" in first_match:
-                return int(first_match.split(":")[0]) - 1
-    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
-        pass
-    return None
-
-
-def _count_lines_wc(file_path: str) -> int:
-    """Use wc to count lines in a file."""
-    if _IS_WINDOWS:
-        return 0
-    try:
-        result = subprocess.run(
-            ["wc", "-l", file_path],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if result.returncode == 0:
-            return int(result.stdout.split()[0])
-    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
-        pass
-    return 0
-
-
-def _read_lines_range(file_path: str, start: int, end: int) -> List[dict]:
-    """Read a range of lines from a file using sed on Unix, or pure Python on Windows."""
-    messages = []
-    
-    if not _IS_WINDOWS:
-        try:
-            result = subprocess.run(
-                ["sed", "-n", f"{start+1},{end}p", file_path],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            if result.returncode == 0:
-                for line in result.stdout.strip().split("\n"):
-                    if line:
-                        try:
-                            messages.append(json.loads(line))
-                        except json.JSONDecodeError:
-                            pass
-                return messages
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
-    
-    with open(file_path, 'r', encoding='utf-8') as f:
-        for idx, line in enumerate(f):
-            if idx >= start and idx < end:
-                try:
-                    messages.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-            elif idx >= end:
-                break
-    return messages
-
-
-def _get_messages_around_from_file(file_path: str, message_id: str, above: int = 50, below: int = 50) -> Tuple[Optional[List[dict]], Optional[int], Optional[int]]:
-    if not os.path.exists(file_path):
-        return None, None, None
-
-    above = max(0, min(above, 200))
-    below = max(0, min(below, 200))
-
-    if not _IS_WINDOWS:
-        target_idx = _find_line_number_grep(file_path, f'"id":"{message_id}"')
-        if target_idx is None:
-            return None, None, None
-        
-        total_lines = _count_lines_wc(file_path)
-        if total_lines == 0:
-            total_lines = target_idx + 1
-        
-        start_line = max(0, target_idx - below)
-        end_line = min(total_lines, target_idx + above + 1)
-        
-        messages = _read_lines_range(file_path, start_line, end_line)
-        return messages, start_line, end_line
-
-    target_idx = None
-    total_lines = 0
-
-    with open(file_path, 'r', encoding='utf-8') as f:
-        for idx, line in enumerate(f):
-            total_lines = idx + 1
-            if target_idx is None and f'"id":"{message_id}"' in line:
-                target_idx = idx
-
-    if target_idx is None:
-        return None, None, None
-
-    start_line = max(0, target_idx - below)
-    end_line = min(total_lines, target_idx + above + 1)
-
-    messages = _read_lines_range(file_path, start_line, end_line)
-    return messages, start_line, end_line
+    return get_messages_around_from_file(messages_file, message_id, above, below)
 
 
 def add_thread_reaction(thread_id: str, message_id: str, emoji: str, user_id: str) -> bool:

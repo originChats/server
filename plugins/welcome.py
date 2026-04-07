@@ -5,23 +5,20 @@ import time
 
 from db import channels, users
 from logger import Logger
+from plugins.plugin_utils import load_plugin_config
 
 REQUIRED_PERMISSIONS = ["owner"]
 
+DEFAULT_CONFIG = {
+    "enabled": True,
+    "welcome_channel": "general",
+    "welcome_message": "Welcome {username}! Thanks for joining the server.",
+    "first_time_only": True
+}
+
 
 def load_config():
-    config_path = os.path.join(os.path.dirname(__file__), "welcome_config.json")
-    try:
-        with open(config_path, "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        Logger.warning("Welcome plugin config not found, using defaults")
-        return {
-            "enabled": True,
-            "welcome_channel": "general",
-            "welcome_message": "Welcome {username}! Thanks for joining the server.",
-            "first_time_only": True
-        }
+    return load_plugin_config("welcome_config.json", DEFAULT_CONFIG)
 
 
 def get_welcomed_users_path():

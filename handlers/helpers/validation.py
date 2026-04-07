@@ -54,17 +54,17 @@ def get_ws_username(ws):
 
 def require_text_channel_access(user_id, channel_name):
     if not channel_name:
-        return None, error("Channel name not provided")
+        return None, make_error("Channel name not provided")
     user_data = users.get_user(user_id)
     if not user_data:
-        return None, error("User not found")
+        return None, make_error("User not found")
     allowed_channels = channels.get_all_channels_for_roles(user_data.get("roles", []))
     allowed_text_channel_names = [c.get("name") for c in allowed_channels if c.get("type") == "text"]
     if channel_name not in allowed_text_channel_names:
-        return None, error("Access denied to this channel")
+        return None, make_error("Access denied to this channel")
     channel_info = channels.get_channel(channel_name)
     if channel_info and channel_info.get("type") != "text":
-        return None, error("Cannot use this command in this channel type")
+        return None, make_error("Cannot use this command in this channel type")
     return user_data, None
 
 
@@ -106,16 +106,16 @@ def get_channel_or_thread_context(channel_name, thread_id, user_id, user_roles, 
 
 def require_voice_channel_access(user_id, channel_name, match_cmd):
     if not channel_name:
-        return None, error("Channel name is required", match_cmd)
+        return None, make_error("Channel name is required", match_cmd)
     user_data = users.get_user(user_id)
     if not user_data:
-        return None, error("User not found", match_cmd)
+        return None, make_error("User not found", match_cmd)
     user_roles = user_data.get("roles", [])
     if not channels.does_user_have_permission(channel_name, user_roles, "view"):
-        return None, error("You do not have permission to access this voice channel", match_cmd)
+        return None, make_error("You do not have permission to access this voice channel", match_cmd)
     channel_info = channels.get_channel(channel_name)
     if not channel_info or channel_info.get("type") != "voice":
-        return None, error("This is not a voice channel", match_cmd)
+        return None, make_error("This is not a voice channel", match_cmd)
     return {"user_data": user_data, "channel_info": channel_info}, None
 
 
@@ -124,19 +124,19 @@ def require_voice_channel_membership(ws, server_data, match_cmd):
     ws_data = _ws_data.get(id(ws), {})
     user_id = ws_data.get("user_id")
     if not user_id:
-        return None, None, error("Authentication required", match_cmd)
+        return None, None, make_error("Authentication required", match_cmd)
     if not server_data:
-        return None, None, error("Server data not available", match_cmd)
+        return None, None, make_error("Server data not available", match_cmd)
     voice_channels = server_data.get("voice_channels", {})
     current_channel = ws_data.get("voice_channel")
     if not current_channel:
-        return None, None, error("You are not in a voice channel", match_cmd)
+        return None, None, make_error("You are not in a voice channel", match_cmd)
     if current_channel not in voice_channels:
         ws_data["voice_channel"] = None
-        return None, None, error("Voice channel no longer exists", match_cmd)
+        return None, None, make_error("Voice channel no longer exists", match_cmd)
     if user_id not in voice_channels[current_channel]:
         ws_data["voice_channel"] = None
-        return None, None, error("You are not in this voice channel", match_cmd)
+        return None, None, make_error("You are not in this voice channel", match_cmd)
     return user_id, current_channel, None
 
 

@@ -4,9 +4,11 @@ import os
 import secrets
 import threading
 import sys
+import bcrypt
 from typing import Dict, Optional
 
 from . import roles
+from constants import ALLOWED_STATUSES
 
 from logger import Logger
 from config_store import get_config_value
@@ -14,13 +16,12 @@ from config_store import get_config_value
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 users_index = os.path.join(_MODULE_DIR, "users.json")
 
-DEFAULT_USERS = {}
+DEFAULT_USERS: Dict[str, dict] = {}
 
 _lock = threading.RLock()
 _users_cache: Dict[str, dict] = {}
 _users_loaded: bool = False
 
-ALLOWED_STATUSES = ["online", "idle", "dnd", "offline"]
 DEFAULT_STATUS = {"status": "online", "text": ""}
 
 
@@ -84,7 +85,7 @@ def get_user(user_id):
         return copy.deepcopy(user) if user is not None else None
 
 
-def add_user(user_id, username=None):
+def add_user(user_id, username=None, default_roles=None):
     with _lock:
         if user_exists(user_id):
             return False
@@ -96,7 +97,9 @@ def add_user(user_id, username=None):
         elif "username" not in user_data:
             user_data["username"] = user_id
 
-        if "roles" not in user_data:
+        if default_roles:
+            user_data["roles"] = default_roles
+        elif "roles" not in user_data:
             user_data["roles"] = []
         if "status" not in user_data:
             user_data["status"] = DEFAULT_STATUS
@@ -124,12 +127,7 @@ def get_users():
                 continue
 
             user_roles = user_data.get("roles", [])
-            color = None
-            if user_roles:
-                first_role_name = user_roles[0]
-                first_role_data = roles.get_role(first_role_name)
-                if first_role_data:
-                    color = first_role_data.get("color")
+            color = roles.get_user_color(user_roles)
 
             user_status = user_data.get("status", DEFAULT_STATUS)
             username = user_data.get("username", user_id)
@@ -365,6 +363,88 @@ def get_status(user_id) -> dict:
     if user:
         return user.get("status", DEFAULT_STATUS)
     return DEFAULT_STATUS
+
+
+CRACKED_USER_PREFIX = "USR:local_"
+
+
+def _hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+
+def _verify_password(password: str, password_hash: str) -> bool:
+    try:
+        return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
+    except Exception:
+        return False
+
+
+def register_cracked_user(username: str, password: str, default_roles: list | None = None) -> tuple[bool, str | None, str | None]:
+    username = username.strip().lower()
+    if not username or len(username) < 2 or len(username) > 32:
+        return False, None, "Username must be 2-32 characters"
+    if not password or len(password) < 4 or len(password) > 72:
+        return False, None, "Password must be 4-72 characters"
+    if not username.replace("_", "").replace("-", "").isalnum():
+        return False, None, "Username can only contain letters, numbers, hyphens, and underscores"
+    
+    user_id = f"{CRACKED_USER_PREFIX}{username}"
+
+    with _lock:
+        users = _get_users_cache()
+        if user_id in users:
+            return False, None, "Username already taken"
+
+        for existing_id, existing_data in users.items():
+            if existing_data.get("username", "").lower() == username:
+                return False, None, "Username already taken"
+
+        password_hash = _hash_password(password)
+
+        user_data = {
+            "username": username,
+            "password_hash": password_hash,
+            "roles": default_roles or ["user"],
+            "status": DEFAULT_STATUS,
+            "pfp_url": None
+        }
+        users[user_id] = user_data
+        _save_users(users)
+        return True, user_id, None
+
+
+def authenticate_cracked_user(username: str, password: str) -> tuple[bool, str | None, str | None]:
+    username = username.strip().lower()
+    
+    with _lock:
+        users = _get_users_cache()
+        for user_id, user_data in users.items():
+            if user_data.get("username", "").lower() == username:
+                if user_id.startswith(CRACKED_USER_PREFIX):
+                    if _verify_password(password, user_data.get("password_hash", "")):
+                        return True, user_id, None
+                    return False, None, "Invalid password"
+                return False, None, "This account uses Rotur authentication"
+        return False, None, "User not found"
+
+
+def set_pfp(user_id: str, pfp_url: str) -> bool:
+    with _lock:
+        users = _get_users_cache()
+        if user_id not in users:
+            return False
+        users[user_id]["pfp_url"] = pfp_url
+        _save_users(users)
+        return True
+
+
+def get_pfp(user_id: str) -> Optional[str]:
+    user = get_user(user_id)
+    return user.get("pfp_url") if user else None
+
+
+def is_cracked_user(user_id: str) -> bool:
+    return user_id.startswith(CRACKED_USER_PREFIX) if user_id else False
 
 
 def set_status(user_id, status, text=None):

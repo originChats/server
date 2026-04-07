@@ -3,7 +3,7 @@ from urllib.parse import urlsplit, unquote
 from aiohttp import web
 import aiohttp
 from handlers.websocket_utils import send_to_client, heartbeat, broadcast_to_all, broadcast_to_all_except, broadcast_to_channel_except, broadcast_to_voice_channel_with_viewers, set_ws_data
-from handlers.auth import handle_authentication
+from handlers.auth import handle_authentication, handle_cracked_auth, handle_cracked_register
 from handlers import message as message_handler
 from handlers.rate_limiter import RateLimiter
 from handlers import github_webhook
@@ -550,7 +550,7 @@ class OriginChatsServer:
 
         github_event = request.headers.get("X-GitHub-Event", "")
         if github_event and "repository" in data and "ref" in data:
-            msg_for_client, error = github_webhook.handle_github_webhook(data, github_event, channel_name)
+            msg_for_client, error = await github_webhook.handle_github_webhook(data, github_event, channel_name)
             if error:
                 return self._apply_cors(web.Response(
                     status=400,
@@ -653,7 +653,8 @@ class OriginChatsServer:
                     "version": "1.1.0",
                     "validator_key": connection_validator_key,
                     "capabilities": self.capabilities,
-                    "permissions": list(permissions_db.PERMISSIONS.keys())
+                    "permissions": list(permissions_db.PERMISSIONS.keys()),
+                    "auth_mode": self.config.get("auth_mode", "rotur")
                 }
             })
 
@@ -664,6 +665,11 @@ class OriginChatsServer:
                         ws_data = self._ws_data.get(ws_id, {})
 
                         if data.get("cmd") == "auth" and not ws_data.get("authenticated", False):
+                            auth_mode = self.config.get("auth_mode", "rotur")
+                            if auth_mode == "cracked-only":
+                                await send_to_client(ws, {"cmd": "auth_error", "val": "Rotur authentication is disabled. Use login or register commands."})
+                                continue
+                            
                             auth_server_data = {
                                 "connected_clients": self.connected_clients,
                                 "connected_usernames": self.connected_usernames,
@@ -677,6 +683,23 @@ class OriginChatsServer:
                                 validator_key=ws_data.get("validator_key")
                             )
                             continue
+
+                        auth_mode = self.config.get("auth_mode", "rotur")
+                        if auth_mode in ("cracked", "cracked-only") and not ws_data.get("authenticated", False):
+                            auth_server_data = {
+                                "connected_clients": self.connected_clients,
+                                "connected_usernames": self.connected_usernames,
+                                "config": self.config,
+                                "plugin_manager": self.plugin_manager,
+                                "rate_limiter": self.rate_limiter,
+                                "_ws_data": self._ws_data
+                            }
+                            if data.get("cmd") == "login":
+                                await handle_cracked_auth(ws, data, self.config, self.connected_clients, client_ip, auth_server_data)
+                                continue
+                            elif data.get("cmd") == "register":
+                                await handle_cracked_register(ws, data, self.config, self.connected_clients, client_ip, auth_server_data)
+                                continue
 
                         if not ws_data.get("authenticated", False):
                             await send_to_client(ws, {"cmd": "auth_error", "val": "Authentication required"})

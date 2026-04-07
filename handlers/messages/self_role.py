@@ -28,12 +28,7 @@ async def handle_self_role_add(ws, message, match_cmd, server_data):
 
     username = users.get_username_by_id(user_id)
     updated_roles = users.get_user_roles(user_id)
-
-    color = None
-    if updated_roles:
-        first_role_data = roles.get_role(updated_roles[0])
-        if first_role_data:
-            color = first_role_data.get("color")
+    color = roles.get_user_color(updated_roles)
 
     if server_data:
         server_data["plugin_manager"].trigger_event("self_role_add", ws, {
@@ -81,12 +76,7 @@ async def handle_self_role_remove(ws, message, match_cmd, server_data):
 
     username = users.get_username_by_id(user_id)
     updated_roles = users.get_user_roles(user_id)
-
-    color = None
-    if updated_roles:
-        first_role_data = roles.get_role(updated_roles[0])
-        if first_role_data:
-            color = first_role_data.get("color")
+    color = roles.get_user_color(updated_roles)
 
     if server_data:
         server_data["plugin_manager"].trigger_event("self_role_remove", ws, {

@@ -286,12 +286,12 @@ def save_attachment(
             if existing_attachment:
                 now = time.time()
                 if permanent:
-                    expiration_days = get_permanent_expiration_days()
+                    expiration_days: int | float = get_permanent_expiration_days()
                     if custom_expires_in_days is not None and custom_expires_in_days < expiration_days:
                         expiration_days = custom_expires_in_days
                 else:
-                    max_expiration_days = calculate_expiration_days(size)
-                    free_tier_max = get_free_tier_max_expiration_days()
+                    max_expiration_days: int | float = calculate_expiration_days(size)
+                    free_tier_max: int = get_free_tier_max_expiration_days()
                     if max_expiration_days > free_tier_max:
                         max_expiration_days = free_tier_max
                     if custom_expires_in_days is not None:
@@ -313,7 +313,7 @@ def save_attachment(
         filename = f"{attachment_id}.{extension}"
         filepath = os.path.join(attachments_dir, filename)
 
-        compression_config = get_config_value("attachments", "compression", default={})
+        compression_config: Dict[str, Any] = get_config_value("attachments", "compression", default={})
         try:
             _save_file_bytes(file_bytes, filepath, mime_type, compression_config)
         except Exception as e:
@@ -322,22 +322,22 @@ def save_attachment(
 
         actual_size = os.path.getsize(filepath)
 
-        now = time.time()
-        if permanent:
-            expiration_days = get_permanent_expiration_days()
-            if custom_expires_in_days is not None and custom_expires_in_days < expiration_days:
-                expiration_days = custom_expires_in_days
-            expires_at = now + (expiration_days * 24 * 60 * 60)
+    now = time.time()
+    if permanent:
+        expiration_days: int | float = get_permanent_expiration_days()
+        if custom_expires_in_days is not None and custom_expires_in_days < expiration_days:
+            expiration_days = custom_expires_in_days
+        expires_at = now + (expiration_days * 24 * 60 * 60)
+    else:
+        max_expiration_days: int | float = calculate_expiration_days(actual_size)
+        free_tier_max: int = get_free_tier_max_expiration_days()
+        if max_expiration_days > free_tier_max:
+            max_expiration_days = free_tier_max
+        if custom_expires_in_days is not None:
+            expiration_days = min(custom_expires_in_days, max_expiration_days)
         else:
-            max_expiration_days = calculate_expiration_days(actual_size)
-            free_tier_max = get_free_tier_max_expiration_days()
-            if max_expiration_days > free_tier_max:
-                max_expiration_days = free_tier_max
-            if custom_expires_in_days is not None:
-                expiration_days = min(custom_expires_in_days, max_expiration_days)
-            else:
-                expiration_days = max_expiration_days
-            expires_at = now + (expiration_days * 24 * 60 * 60)
+            expiration_days = max_expiration_days
+        expires_at = now + (expiration_days * 24 * 60 * 60)
 
         attachment = {
             "id": attachment_id,
@@ -435,13 +435,14 @@ def cleanup_expired_attachments() -> int:
 
         for attachment_id in expired_ids:
             attachment = attachments.get(attachment_id)
-            if attachment:
-                filepath = os.path.join(attachments_dir, attachment.get("filename", ""))
-                if filepath and os.path.isfile(filepath):
-                    try:
-                        os.remove(filepath)
-                    except OSError:
-                        pass
+            if attachment is None:
+                continue
+            filepath = os.path.join(attachments_dir, attachment.get("filename", ""))
+            if filepath and os.path.isfile(filepath):
+                try:
+                    os.remove(filepath)
+                except OSError:
+                    pass
             del attachments[attachment_id]
 
         if expired_ids:
@@ -512,13 +513,14 @@ def cleanup_unreferenced_attachments() -> int:
 
         for attachment_id in removed_ids:
             attachment = attachments.get(attachment_id)
-            if attachment:
-                filepath = os.path.join(attachments_dir, attachment.get("filename", ""))
-                if filepath and os.path.isfile(filepath):
-                    try:
-                        os.remove(filepath)
-                    except OSError:
-                        pass
+            if attachment is None:
+                continue
+            filepath = os.path.join(attachments_dir, attachment.get("filename", ""))
+            if filepath and os.path.isfile(filepath):
+                try:
+                    os.remove(filepath)
+                except OSError:
+                    pass
             del attachments[attachment_id]
 
         if removed_ids:

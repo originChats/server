@@ -3,9 +3,7 @@ import os
 from db import users
 from handlers.websocket_utils import broadcast_to_all, _get_ws_data, _get_ws_attr
 from logger import Logger
-
-
-MAX_NICKNAME_LENGTH = 20
+from constants import MAX_NICKNAME_LENGTH
 
 
 def get_command_info():

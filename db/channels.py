@@ -106,10 +106,6 @@ def _get_channels_cache() -> List[dict]:
 _msg_cache: Dict[str, dict] = {}
 
 
-def _build_id_index(messages):
-    return {msg["id"]: i for i, msg in enumerate(messages) if "id" in msg}
-
-
 def _load_channel_into_cache(channel_name):
     channel_file = os.path.join(channels_db_dir, channel_name + ".json")
     messages = []
@@ -145,7 +141,7 @@ def _load_channel_into_cache(channel_name):
             messages = []
         entry = {
             "messages": messages,
-            "id_to_idx": _build_id_index(messages),
+            "id_to_idx": build_id_index(messages),
             "offsets": None,
             "lengths": None,
         }
@@ -169,7 +165,7 @@ def _load_channel_into_cache(channel_name):
 
     _msg_cache[channel_name] = {
         "messages": messages,
-        "id_to_idx": _build_id_index(messages),
+        "id_to_idx": build_id_index(messages),
         "offsets": offsets,
         "lengths": lengths,
     }
@@ -283,7 +279,7 @@ def _write_channel_file(channel_name, messages):
         old_messages = cache["messages"]
         old_id_to_idx = cache["id_to_idx"]
         cache["messages"] = messages
-        cache["id_to_idx"] = _build_id_index(messages)
+        cache["id_to_idx"] = build_id_index(messages)
         try:
             _full_rewrite(channel_name)
         except Exception:
@@ -571,7 +567,7 @@ def delete_channel_message(channel_name, message_id):
             return False
 
         messages.pop(idx)
-        cache["id_to_idx"] = _build_id_index(messages)
+        cache["id_to_idx"] = build_id_index(messages)
         _full_rewrite(channel_name)
 
         return True
@@ -842,6 +838,6 @@ def purge_messages(channel_name, count=None):
             messages.clear()
         else:
             del messages[:count]
-        cache["id_to_idx"] = _build_id_index(messages)
+        cache["id_to_idx"] = build_id_index(messages)
         _full_rewrite(channel_name)
         return True

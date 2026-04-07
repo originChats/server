@@ -1,12 +1,58 @@
 import asyncio
+from urllib.parse import urlparse
 from db import users, roles
 from handlers.messages.helpers import _error, _require_user_id, _require_permission
 from handlers.websocket_utils import broadcast_to_all, _get_ws_attr
 from handlers.helpers.validation import (
     require_user_roles as _require_user_roles,
 )
+from logger import Logger
 
 ALLOWED_UPDATE_FIELDS = {"username", "nickname"}
+
+
+async def handle_pfp_set(ws, message, server_data):
+    auth_mode = server_data.get("config", {}).get("auth_mode", "rotur")
+    if auth_mode not in ("cracked", "cracked-only"):
+        return _error("Profile pictures are managed by Rotur for this account", "pfp_set")
+
+    user_id, error = _require_user_id(ws, "Authentication required")
+    if error:
+        return error
+
+    if not user_id:
+        return _error("User ID is required", "pfp_set")
+
+    url = message.get("url")
+    if not url:
+        return _error("URL required", "pfp_set")
+
+    parsed = urlparse(url)
+    if not parsed.scheme in ("http", "https") or not parsed.netloc:
+        return _error("Invalid URL format", "pfp_set")
+
+    if len(url) > 500:
+        return _error("URL too long (max 500 characters)", "pfp_set")
+
+    if not users.set_pfp(user_id, url):
+        return _error("Failed to update profile picture", "pfp_set")
+
+    username = _get_ws_attr(ws, "username") or user_id
+    Logger.add(f"User {username} updated profile picture")
+    return {"cmd": "pfp_set", "val": url}
+
+
+async def handle_pfp_get(ws, message, server_data):
+    username = message.get("username")
+    if not username:
+        return _error("Username required", "pfp_get")
+
+    user_id = users.get_id_by_username(username)
+    if not user_id:
+        return _error("User not found", "pfp_get")
+
+    pfp_url = users.get_pfp(user_id)
+    return {"cmd": "pfp_get", "val": pfp_url, "username": username}
 
 
 async def handle_user_update(ws, message, match_cmd, server_data):

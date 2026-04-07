@@ -16,7 +16,7 @@ MAX_POLL_OPTIONS = 10
 
 HEARTBEAT_INTERVAL = 30  # seconds
 
-VALID_STATUSES = {"online", "idle", "dnd", "invisible", "offline"}
+ALLOWED_STATUSES = {"online", "idle", "dnd", "offline", "invisible"}
 
 SYSTEM_ROLES = {"owner", "admin", "moderator", "user"}
 PROTECTED_ROLES = {"owner", "admin", "moderator"}

@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 webhooks_file = os.path.join(_MODULE_DIR, "webhooks.json")
 
-DEFAULT_WEBHOOKS = {}
+DEFAULT_WEBHOOKS: Dict[str, dict] = {}
 
 _lock = threading.RLock()
 _webhooks_cache: Dict[str, dict] = {}

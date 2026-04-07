@@ -14,7 +14,7 @@ async def handle_react_add(ws, message, match_cmd, _get_channel_or_thread_contex
     if not user_id:
         return _error("User ID is required", match_cmd)
 
-    user_roles, error = await _require_user_roles(user_id)
+    user_roles, error = _require_user_roles(user_id)
     if error:
         return error
 
@@ -73,7 +73,7 @@ async def handle_react_remove(ws, message, match_cmd, _get_channel_or_thread_con
     if not message_id or not emoji_str:
         return _error("Message ID and emoji are required", match_cmd)
 
-    user_roles, error = await _require_user_roles(user_id)
+    user_roles, error = _require_user_roles(user_id)
     if error:
         return error
 

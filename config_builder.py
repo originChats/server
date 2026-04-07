@@ -57,6 +57,10 @@ DEFAULT_CONFIG = {
             "name": "Admin",
         },
     },
+    "auth_mode": "rotur",
+    "cracked": {
+        "allow_registration": True,
+    },
 }
 
 

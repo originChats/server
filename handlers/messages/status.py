@@ -16,7 +16,7 @@ async def handle_status_set(ws, message, match_cmd, server_data):
     text = message.get("text")
 
     if not users.set_status(user_id, status, text):
-        return _error("Invalid status. Must be one of: online, idle, dnd, invisible", match_cmd)
+        return _error("Invalid status. Must be one of: online, idle, dnd, offline, invisible", match_cmd)
 
     username = _get_ws_username(ws)
     status_data = {"status": status, "text": text or ""}
@@ -34,11 +34,7 @@ async def handle_status_set(ws, message, match_cmd, server_data):
     elif is_leaving_invisible:
         user_data = users.get_user(user_id)
         user_roles = user_data.get("roles", []) if user_data else []
-        color = None
-        if user_roles:
-            first_role_data = roles.get_role(user_roles[0])
-            if first_role_data:
-                color = first_role_data.get("color")
+        color = roles.get_user_color(user_roles)
         await broadcast_to_all(server_data["connected_clients"], {
             "cmd": "user_connect",
             "user": {
