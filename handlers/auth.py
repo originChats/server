@@ -116,7 +116,7 @@ async def _send_auth_success(
 
 
 async def handle_cracked_auth(
-    websocket, data, config_data, connected_clients, client_ip, server_data=None
+    websocket, data, _config_data, connected_clients, client_ip, server_data=None
 ):
     username = data.get("username", "").strip()
     password = data.get("password", "")
@@ -136,6 +136,13 @@ async def handle_cracked_auth(
         return False
 
     user = users.get_user(user_id)
+    if not user:
+        await send_to_client(
+            websocket, {"cmd": "auth_error", "val": "User not found"}
+        )
+        Logger.error(f"Client {client_ip} user not found after auth: {user_id}")
+        return False
+
     if users.is_user_banned(user_id):
         await send_to_client(
             websocket,
@@ -164,7 +171,7 @@ async def handle_cracked_auth(
 
 
 async def handle_cracked_register(
-    websocket, data, config_data, connected_clients, client_ip, server_data=None
+    websocket, data, _config_data, connected_clients, client_ip, server_data=None
 ):
     allow_registration = get_config_value("cracked", "allow_registration", default=True)
     if not allow_registration:
@@ -197,6 +204,13 @@ async def handle_cracked_register(
         return False
 
     user = users.get_user(user_id)
+    if not user:
+        await send_to_client(
+            websocket, {"cmd": "auth_error", "val": "User not found after registration"}
+        )
+        Logger.error(f"Client {client_ip} user not found after registration: {user_id}")
+        return False
+
     stored_username = user.get("username", username)
     Logger.add(f"New cracked user registered: {stored_username} (ID: {user_id})")
 
@@ -216,7 +230,7 @@ async def handle_cracked_register(
 async def handle_authentication(
     websocket,
     data,
-    config_data,
+    _config_data,
     connected_clients,
     client_ip,
     server_data=None,

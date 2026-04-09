@@ -9,7 +9,6 @@ import uuid
 from typing import Dict, List, Optional, Tuple
 
 from . import users
-from .emoji_utils import is_valid_emoji
 from .shared import convert_messages_to_user_format
 from .storage_utils import (
     find_line_number_grep,

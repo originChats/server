@@ -1,35 +1,23 @@
-import os
-
 from slash_handlers import SERVER_SLASH_HANDLERS
 from handlers.websocket_utils import _get_ws_attr
+from handlers.helpers.validation import check_role_permission
+from slash_handlers.utils import make_command_info
 
 
 def get_command_info():
-    return {
-        "name": "help",
-        "description": "List all available slash commands",
-        "options": [],
-        "whitelistRoles": None,
-        "blacklistRoles": None,
-        "ephemeral": False
-    }
-
-
-def _check_role_permission(whitelist, blacklist, user_roles):
-    if blacklist and user_roles:
-        if any(role in blacklist for role in user_roles):
-            return False
-    if whitelist:
-        if not user_roles or not any(role in whitelist for role in user_roles):
-            return False
-    return True
+    return make_command_info(
+        name="help",
+        description="List all available slash commands",
+        options=[],
+        is_mod_command=False
+    )
 
 
 def _get_server_commands(user_roles):
     available = []
     for cmd_name, handler_data in SERVER_SLASH_HANDLERS.items():
         info = handler_data["info"]
-        if _check_role_permission(
+        if check_role_permission(
             info.get("whitelistRoles"),
             info.get("blacklistRoles"),
             user_roles
@@ -57,7 +45,7 @@ def _get_client_commands(server_data, user_roles):
             if not command_obj:
                 continue
             
-            if _check_role_permission(
+            if check_role_permission(
                 getattr(command_obj, "whitelistRoles", None),
                 getattr(command_obj, "blacklistRoles", None),
                 user_roles

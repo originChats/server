@@ -1,36 +1,29 @@
-import os
-
 from db import users
 from logger import Logger
+from slash_handlers.utils import (
+    validate_target_user,
+    create_mod_response,
+    make_command_info
+)
 
 
 def get_command_info():
-    return {
-        "name": "unmute",
-        "description": "Remove timeout from a user",
-        "options": [
-            {
-                "name": "username",
-                "description": "The user to unmute",
-                "type": "str",
-                "required": True
-            }
+    return make_command_info(
+        name="unmute",
+        description="Remove timeout from a user",
+        options=[
+            {"name": "username", "description": "The user to unmute", "type": "str", "required": True}
         ],
-        "whitelistRoles": ["admin", "owner"],
-        "blacklistRoles": None,
-        "ephemeral": False
-    }
+        is_mod_command=True
+    )
 
 
 async def handle(ws, args, channel, server_data):
     target_username = args.get("username")
     
-    if not target_username:
-        return {"error": "Username is required"}
-    
-    target_id = users.get_id_by_username(target_username)
-    if not target_id:
-        return {"error": f"User '{target_username}' not found"}
+    target_id, _, error = validate_target_user(target_username)
+    if error:
+        return error
     
     if not server_data or not server_data.get("rate_limiter"):
         return {"error": "Rate limiter not available"}
@@ -40,4 +33,4 @@ async def handle(ws, args, channel, server_data):
     
     Logger.info(f"User {target_username} unmuted by slash command")
     
-    return {"response": f"🔊 **{target_username}** has been unmuted."}
+    return create_mod_response("🔊", target_username, "unmuted")

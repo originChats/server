@@ -1,5 +1,5 @@
-from db import channels, users, roles, serverEmojis, threads, permissions as perms, polls
-import time, uuid, asyncio, json, re, copy
+from db import channels, users, roles, threads, permissions as perms
+import asyncio
 from handlers.messages.webhook import handle_webhook_create, handle_webhook_get, handle_webhook_list, handle_webhook_delete, handle_webhook_update, handle_webhook_regenerate
 from handlers.messages.emoji import handle_emoji_add, handle_emoji_delete, handle_emoji_get_all, handle_emoji_update, handle_emoji_get_filename, handle_emoji_get_id
 from handlers.messages.attachment import handle_attachment_delete, handle_attachment_get
@@ -20,30 +20,26 @@ from handlers.messages.message_delete import handle_message_delete
 from handlers.messages.message_pin import handle_message_pin, handle_message_unpin, handle_messages_pinned
 from handlers.messages.messages import handle_messages_get, handle_messages_around, handle_messages_search, handle_message_get, handle_message_replies
 from logger import Logger
-from config_store import get_config_value
 from handlers.websocket_utils import broadcast_to_voice_channel_with_viewers, broadcast_to_all, _get_ws_attr, _set_ws_attr
 from handlers import push as push_handler
 from handlers.helpers.validation import (
     make_error as _error,
-    config_value as _config_value,
     require_user_id as _require_user_id,
     require_user_roles as _require_user_roles,
-    require_text_channel_access as _require_text_channel_access,
     get_channel_or_thread_context as _get_channel_or_thread_context,
     require_voice_channel_access as _require_voice_channel_access,
     require_voice_channel_membership as _require_voice_channel_membership,
     build_voice_participant_data as _build_voice_participant_data,
-    get_ws_username as _get_ws_username,
-    validate_embeds,
+)
+from handlers.helpers.thread import (
+    validate_thread_access,
+    validate_thread_modification,
+    format_thread_for_response,
 )
 from handlers.helpers.mentions import (
     get_ping_patterns_for_user,
     check_ping_in_content,
-    validate_role_mentions_permissions,
-    get_message_pings,
 )
-import copy
-
 
 async def _broadcast_voice_event(connected_clients, voice_channels, channel_name, event_type, user_data_with_peer, user_data_without_peer=None):
     if user_data_without_peer is None:
@@ -640,13 +636,16 @@ def _handle_thread_create(ws, message, match_cmd):
         return error
     if not user_id:
         return _error("User ID is required", match_cmd)
+    
     channel_name = message.get("channel")
     thread_name = message.get("name")
     if not channel_name or not thread_name:
         return _error("Channel and thread name are required", match_cmd)
+    
     user_roles = users.get_user_roles(user_id)
     if not user_roles:
         return _error("User roles not found", match_cmd)
+    
     channel_info = channels.get_channel(channel_name)
     if not channel_info:
         return _error("Channel not found", match_cmd)
@@ -654,99 +653,59 @@ def _handle_thread_create(ws, message, match_cmd):
         return _error("Threads can only be created in forum channels", match_cmd)
     if not channels.does_user_have_permission(channel_name, user_roles, "create_thread"):
         return _error("You do not have permission to create threads in this channel", match_cmd)
+    
     thread_name = thread_name.strip()
     if not thread_name:
         return _error("Thread name cannot be empty", match_cmd)
-
+    
     username = users.get_username_by_id(user_id)
     thread_data = threads.create_thread(channel_name, thread_name, user_id)
-    thread_data_copy = copy.deepcopy(thread_data)
+    thread_data_copy = format_thread_for_response(thread_data)
     thread_data_copy["created_by"] = username
-    thread_data_copy["participants"] = [users.get_username_by_id(pid) for pid in thread_data_copy.get("participants", [])]
+    
     return {"cmd": "thread_create", "thread": thread_data_copy, "channel": channel_name, "global": True}
 
 
 def _handle_thread_get(ws, message, match_cmd):
-    user_id, error = _require_user_id(ws, "Authentication required")
-    if error:
+    ctx, error = validate_thread_access(ws, message, match_cmd)
+    if error or not ctx:
         return error
-    thread_id = message.get("thread_id")
-    if not thread_id:
-        return _error("Thread ID is required", match_cmd)
-    thread_data = threads.get_thread(thread_id)
-    if not thread_data:
-        return _error("Thread not found", match_cmd)
-    user_roles = users.get_user_roles(user_id)
-    if not user_roles:
-        return _error("User roles not found", match_cmd)
-    if not channels.does_user_have_permission(thread_data.get("parent_channel"), user_roles, "view"):
-        return _error("You do not have permission to view this thread", match_cmd)
-    thread_data["created_by"] = users.get_username_by_id(thread_data.get("created_by"))
-    thread_data["participants"] = [users.get_username_by_id(pid) for pid in thread_data.get("participants", [])]
+
+    thread_data = format_thread_for_response(ctx["thread_data"])
     return {"cmd": "thread_get", "thread": thread_data}
 
 
 def _handle_thread_messages(ws, message, match_cmd):
-    user_id, error = _require_user_id(ws, "Authentication required")
-    if error:
+    ctx, error = validate_thread_access(ws, message, match_cmd)
+    if error or not ctx:
         return error
-    thread_id = message.get("thread_id")
-    if not thread_id:
-        return _error("Thread ID is required", match_cmd)
-    thread_data = threads.get_thread(thread_id)
-    if not thread_data:
-        return _error("Thread not found", match_cmd)
-    user_roles = users.get_user_roles(user_id)
-    if not user_roles:
-        return _error("User roles not found", match_cmd)
-    if not channels.does_user_have_permission(thread_data.get("parent_channel"), user_roles, "view"):
-        return _error("You do not have permission to view this thread", match_cmd)
+
+    thread_id = ctx["thread_id"]
     messages = threads.get_thread_messages(thread_id, message.get("start", 0), message.get("limit", 100))
     return {"cmd": "thread_messages", "thread_id": thread_id, "messages": threads.convert_messages_to_user_format(messages)}
 
 
 def _handle_thread_delete(ws, message, match_cmd):
-    user_id, error = _require_user_id(ws, "Authentication required")
-    if error:
+    ctx, error = validate_thread_modification(ws, message, match_cmd)
+    if error or not ctx:
         return error
-    if not user_id:
-        return _error("User ID is required", match_cmd)
-    thread_id = message.get("thread_id")
-    if not thread_id:
-        return _error("Thread ID is required", match_cmd)
-    thread_data = threads.get_thread(thread_id)
-    if not thread_data:
-        return _error("Thread not found", match_cmd)
-    user_roles = users.get_user_roles(user_id)
-    if not user_roles:
-        return _error("User roles not found", match_cmd)
-    is_owner = thread_data.get("created_by") == user_id
-    can_manage = perms.has_permission(user_id, "manage_threads")
-    if not is_owner and not can_manage:
-        return _error("You do not have permission to delete this thread", match_cmd)
+
+    thread_id = ctx["thread_id"]
+    parent_channel = ctx["parent_channel"]
     threads.delete_thread(thread_id)
-    return {"cmd": "thread_delete", "thread_id": thread_id, "channel": thread_data.get("parent_channel"), "global": True}
+
+    return {"cmd": "thread_delete", "thread_id": thread_id, "channel": parent_channel, "global": True}
 
 
 def _handle_thread_update(ws, message, match_cmd):
-    user_id, error = _require_user_id(ws, "Authentication required")
-    if error:
+    ctx, error = validate_thread_modification(ws, message, match_cmd)
+    if error or not ctx:
         return error
-    if not user_id:
-        return _error("User ID is required", match_cmd)
-    thread_id = message.get("thread_id")
-    if not thread_id:
-        return _error("Thread ID is required", match_cmd)
-    thread_data = threads.get_thread(thread_id)
-    if not thread_data:
-        return _error("Thread not found", match_cmd)
-    user_roles = users.get_user_roles(user_id)
-    if not user_roles:
-        return _error("User roles not found", match_cmd)
-    is_owner = thread_data.get("created_by") == user_id
+
+    thread_id = ctx["thread_id"]
+    user_id = ctx["user_id"]
+
     can_manage = perms.has_permission(user_id, "manage_threads")
-    if not is_owner and not can_manage:
-        return _error("You do not have permission to update this thread", match_cmd)
 
     updates = {}
     if "name" in message:
@@ -759,57 +718,51 @@ def _handle_thread_update(ws, message, match_cmd):
         updates["locked"] = bool(message["locked"])
     if "archived" in message:
         updates["archived"] = bool(message["archived"])
+
     if updates:
         threads.update_thread(thread_id, updates)
+
     return {"cmd": "thread_update", "thread": threads.get_thread(thread_id), "global": True}
 
 
 def _handle_thread_join(ws, message, match_cmd):
-    user_id, error = _require_user_id(ws, "Authentication required")
-    if error:
+    ctx, error = validate_thread_access(ws, message, match_cmd)
+    if error or not ctx:
         return error
-    if not user_id:
-        return _error("User ID is required", match_cmd)
-    thread_id = message.get("thread_id")
-    if not thread_id:
-        return _error("Thread ID is required", match_cmd)
-    thread_data = threads.get_thread(thread_id)
-    if not thread_data:
-        return _error("Thread not found", match_cmd)
-    user_roles = users.get_user_roles(user_id)
-    if not user_roles:
-        return _error("User roles not found", match_cmd)
-    if not channels.does_user_have_permission(thread_data.get("parent_channel"), user_roles, "view"):
-        return _error("You do not have permission to join this thread", match_cmd)
+
+    thread_id = ctx["thread_id"]
+    user_id = ctx["user_id"]
+
     if threads.is_thread_locked(thread_id):
         return _error("This thread is locked", match_cmd)
+
     threads.join_thread(thread_id, user_id)
     updated = threads.get_thread(thread_id)
     if not updated:
         return _error("Thread not found", match_cmd)
+
     username = users.get_username_by_id(user_id)
-    updated["participants"] = [users.get_username_by_id(pid) for pid in updated.get("participants", [])]
+    updated = format_thread_for_response(updated)
+
     return {"cmd": "thread_join", "thread": updated, "thread_id": thread_id, "user": username, "global": True}
 
 
 def _handle_thread_leave(ws, message, match_cmd):
-    user_id, error = _require_user_id(ws, "Authentication required")
-    if error:
+    ctx, error = validate_thread_access(ws, message, match_cmd, require_view_permission=False)
+    if error or not ctx:
         return error
-    if not user_id:
-        return _error("User ID is required", match_cmd)
-    thread_id = message.get("thread_id")
-    if not thread_id:
-        return _error("Thread ID is required", match_cmd)
-    thread_data = threads.get_thread(thread_id)
-    if not thread_data:
-        return _error("Thread not found", match_cmd)
+
+    thread_id = ctx["thread_id"]
+    user_id = ctx["user_id"]
+
     threads.leave_thread(thread_id, user_id)
     updated = threads.get_thread(thread_id)
     if not updated:
         return _error("Thread not found", match_cmd)
+
     username = users.get_username_by_id(user_id)
-    updated["participants"] = [users.get_username_by_id(pid) for pid in updated.get("participants", [])]
+    updated = format_thread_for_response(updated)
+
     return {"cmd": "thread_leave", "thread": updated, "thread_id": thread_id, "user": username, "global": True}
 
 

@@ -1,0 +1,6 @@
+[tool.vulture]
+exclude = ["node_modules", ".venv", ".git", ".opencode", "__pycache__"]
+min_confidence = 80
+ignore_names = ["cls"]
+make_whitelist = false
+paths = ["."]

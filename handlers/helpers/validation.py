@@ -27,12 +27,70 @@ def require_user_id(ws, error_message: str = "User not authenticated"):
 
 def require_user_roles(user_id, *, requiredRoles=[], forbiddenRoles=[], missing_roles_message="User roles not found"):
     user_roles = users.get_user_roles(user_id)
+    if forbiddenRoles and user_roles:
+        for role in forbiddenRoles:
+            if role in user_roles:
+                return None, make_error(f"Access denied: '{role}' role is forbidden")
     for role in requiredRoles:
         if not user_roles or role not in user_roles:
             return None, make_error(f"Access denied: '{role}' role required")
     if not user_roles:
         return None, make_error(missing_roles_message)
     return user_roles, None
+
+
+def check_role_permission(whitelist: list | None, blacklist: list | None, user_roles: list) -> bool:
+    """
+    Centralized role permission check used everywhere.
+    
+    Args:
+        whitelist: List of allowed roles (None = no restriction)
+        blacklist: List of forbidden roles (None = no restriction)
+        user_roles: List of user's roles
+    
+    Returns:
+        True if user has permission, False otherwise
+    """
+    if blacklist and user_roles:
+        if any(role in blacklist for role in user_roles):
+            return False
+    if whitelist:
+        if not user_roles or not any(role in whitelist for role in user_roles):
+            return False
+    return True
+
+
+def require_owner(user_id: str, match_cmd: str) -> dict | None:
+    """
+    Check if user has owner role. Returns error dict if not.
+    
+    Args:
+        user_id: User ID to check
+        match_cmd: Command name for error reporting
+    
+    Returns:
+        Error dict if not owner, None if authorized
+    """
+    _, error = require_user_roles(user_id, requiredRoles=["owner"])
+    if error:
+        error["src"] = match_cmd
+    return error
+
+
+def require_server_data(server_data: dict | None, match_cmd: str) -> tuple[dict | None, dict | None]:
+    """
+    Validate server_data is available.
+    
+    Args:
+        server_data: Server data dict
+        match_cmd: Command name for error reporting
+    
+    Returns:
+        (server_data, error) tuple - server_data is None if unavailable
+    """
+    if not server_data:
+        return None, make_error("Server data not available", match_cmd)
+    return server_data, None
 
 
 def require_permission(user_id, permission, match_cmd, channel_name=None):
@@ -155,26 +213,6 @@ def validate_type(value, expected_type):
         case "bool": return isinstance(value, bool)
         case "enum": return isinstance(value, str)
         case _: return False
-
-
-def validate_option_value(option_name, value, option):
-    if not validate_type(value, option.type):
-        return False, f"Invalid type for argument '{option_name}': expected {option.type}, got {type(value).__name__}"
-    if option.type == "enum":
-        if not option.choices:
-            return False, f"Enum argument '{option_name}' has no choices configured"
-        if value not in option.choices:
-            allowed_values = ", ".join(option.choices)
-            return False, f"Invalid value for argument '{option_name}': expected one of [{allowed_values}], got '{value}'"
-    return True, None
-
-
-def validate_embed(embed: dict) -> tuple[bool, str | None]:
-    try:
-        Embed.model_validate(embed)
-        return True, None
-    except Exception as e:
-        return False, str(e)
 
 
 def validate_embeds(embeds: list) -> tuple[bool, str | None]:

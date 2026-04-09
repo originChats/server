@@ -5,13 +5,11 @@ import threading
 from typing import Dict, List, Optional, Tuple
 
 from . import users
-from .emoji_utils import is_valid_emoji
 from .shared import convert_messages_to_user_format
 from .storage_utils import (
     find_line_number_grep,
     count_lines_wc,
     read_lines_range,
-    read_last_n_lines,
     get_messages_around_from_file,
     build_id_index,
     atomic_write_json,

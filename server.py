@@ -1,5 +1,5 @@
-import asyncio, json, os, mimetypes, secrets, uuid, time
-from urllib.parse import urlsplit, unquote
+import asyncio, json, os, secrets, uuid, time
+from urllib.parse import unquote
 from aiohttp import web
 import aiohttp
 from handlers.websocket_utils import send_to_client, heartbeat, broadcast_to_all, broadcast_to_all_except, broadcast_to_channel_except, broadcast_to_voice_channel_with_viewers, set_ws_data
@@ -12,7 +12,7 @@ import watchers
 from plugin_manager import PluginManager
 from logger import Logger
 import slash_handlers
-from constants import DEFAULT_MAX_ATTACHMENT_SIZE, DEFAULT_WEBHOOK_MAX_BODY_SIZE, HEARTBEAT_INTERVAL
+from constants import HEARTBEAT_INTERVAL
 
 
 class OriginChatsServer:

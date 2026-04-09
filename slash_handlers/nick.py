@@ -1,31 +1,23 @@
-import os
-
 from db import users
-from handlers.websocket_utils import broadcast_to_all, _get_ws_data, _get_ws_attr
+from handlers.websocket_utils import broadcast_to_all, _get_ws_attr
 from logger import Logger
 from constants import MAX_NICKNAME_LENGTH
+from slash_handlers.utils import make_command_info, get_user_id_from_ws
 
 
 def get_command_info():
-    return {
-        "name": "nick",
-        "description": "Set or clear your display nickname",
-        "options": [
-            {
-                "name": "nickname",
-                "description": "Your new nickname (leave empty to clear)",
-                "type": "str",
-                "required": False
-            }
+    return make_command_info(
+        name="nick",
+        description="Set or clear your display nickname",
+        options=[
+            {"name": "nickname", "description": "Your new nickname (leave empty to clear)", "type": "str", "required": False}
         ],
-        "whitelistRoles": None,
-        "blacklistRoles": None,
-        "ephemeral": False
-    }
+        is_mod_command=False
+    )
 
 
 async def handle(ws, args, channel, server_data):
-    user_id = _get_ws_attr(ws, "user_id")
+    user_id = get_user_id_from_ws(ws)
     if not user_id:
         return {"error": "Not authenticated"}
     

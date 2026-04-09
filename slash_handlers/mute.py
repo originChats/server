@@ -1,47 +1,32 @@
-import os
-
+import asyncio
 from db import users
-from handlers.websocket_utils import send_to_client, _get_ws_data, _get_ws_attr
+from handlers.websocket_utils import send_to_client, _get_ws_attr
 from logger import Logger
+from slash_handlers.utils import (
+    validate_target_user,
+    check_can_modify_target,
+    create_mod_response,
+    make_command_info
+)
 
 
 def get_command_info():
-    return {
-        "name": "mute",
-        "description": "Timeout a user (prevent them from sending messages)",
-        "options": [
-            {
-                "name": "username",
-                "description": "The user to mute",
-                "type": "str",
-                "required": True
-            },
-            {
-                "name": "duration",
-                "description": "Duration in seconds",
-                "type": "int",
-                "required": True
-            },
-            {
-                "name": "reason",
-                "description": "Reason for the mute",
-                "type": "str",
-                "required": False
-            }
+    return make_command_info(
+        name="mute",
+        description="Timeout a user (prevent them from sending messages)",
+        options=[
+            {"name": "username", "description": "The user to mute", "type": "str", "required": True},
+            {"name": "duration", "description": "Duration in seconds", "type": "int", "required": True},
+            {"name": "reason", "description": "Reason for the mute", "type": "str", "required": False}
         ],
-        "whitelistRoles": ["admin", "owner"],
-        "blacklistRoles": None,
-        "ephemeral": False
-    }
+        is_mod_command=True
+    )
 
 
 async def handle(ws, args, channel, server_data):
     target_username = args.get("username")
     duration = args.get("duration")
     reason = args.get("reason", "No reason provided")
-    
-    if not target_username:
-        return {"error": "Username is required"}
     
     if not duration:
         return {"error": "Duration is required"}
@@ -53,15 +38,13 @@ async def handle(ws, args, channel, server_data):
     except (ValueError, TypeError):
         return {"error": "Duration must be a valid number"}
     
-    target_id = users.get_id_by_username(target_username)
-    if not target_id:
-        return {"error": f"User '{target_username}' not found"}
+    target_id, target_user, error = validate_target_user(target_username)
+    if error:
+        return error
     
-    target_user = users.get_user(target_id)
-    if target_user:
-        target_roles = target_user.get("roles", [])
-        if "owner" in target_roles:
-            return {"error": "Cannot mute the server owner"}
+    error = check_can_modify_target(target_user, "mute")
+    if error:
+        return error
     
     if not server_data or not server_data.get("rate_limiter"):
         return {"error": "Rate limiter not available"}
@@ -77,7 +60,6 @@ async def handle(ws, args, channel, server_data):
             break
     
     if target_ws:
-        import asyncio
         loop = asyncio.get_event_loop()
         loop.create_task(send_to_client(target_ws, {
             "cmd": "rate_limit",
@@ -87,4 +69,4 @@ async def handle(ws, args, channel, server_data):
     
     Logger.info(f"User {target_username} muted for {duration}s by slash command. Reason: {reason}")
     
-    return {"response": f"🔇 **{target_username}** has been muted for {duration} seconds.\n**Reason:** {reason}"}
+    return create_mod_response("🔇", target_username, f"muted for {duration} seconds", reason)

@@ -82,39 +82,6 @@ def read_lines_range(file_path: str, start: int, end: int) -> List[dict]:
     return messages
 
 
-def read_last_n_lines(file_path: str, n: int) -> List[dict]:
-    messages = []
-
-    if not _IS_WINDOWS and n <= 1000:
-        try:
-            result = subprocess.run(
-                ["tail", "-n", str(n), file_path],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            if result.returncode == 0:
-                for line in result.stdout.strip().split("\n"):
-                    if line:
-                        try:
-                            messages.append(json.loads(line))
-                        except json.JSONDecodeError:
-                            pass
-                return messages
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
-
-    with open(file_path, 'r', encoding='utf-8') as f:
-        lines = f.readlines()[-n:]
-        for line in lines:
-            if line.strip():
-                try:
-                    messages.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-    return messages
-
-
 def get_messages_around_from_file(file_path: str, message_id: str, above: int = 50, below: int = 50) -> Tuple[Optional[List[dict]], Optional[int], Optional[int]]:
     if not os.path.exists(file_path):
         return None, None, None

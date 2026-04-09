@@ -14,10 +14,6 @@ def extract_role_mentions(content):
     return set(re.findall(r'@&([a-zA-Z0-9_]+)', content))
 
 
-def extract_all_pings(content):
-    return extract_user_mentions(content), extract_role_mentions(content)
-
-
 def get_ping_patterns_for_user(username, user_roles):
     patterns = [f"@{username}", f"@{username}@", f"@{username} "]
     for role in user_roles:
