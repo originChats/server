@@ -457,6 +457,70 @@ Minimal working client:
 
 ---
 
+## Unreads Tracking
+
+Server-side unread tracking is available for channels and threads.
+
+### Get All Unreads
+
+```javascript
+ws.send(JSON.stringify({ cmd: 'unreads_get' }));
+
+// Response:
+// {
+//   cmd: 'unreads_get',
+//   unreads: {
+//     'general': { last_read: 'msg_123', unread_count: 5, total_messages: 100 },
+//     'random': { last_read: null, unread_count: 50, total_messages: 50 }
+//   }
+// }
+```
+
+### Mark as Read (Explicit Ack)
+
+```javascript
+// Mark channel as read (up to latest message)
+ws.send(JSON.stringify({ cmd: 'unreads_ack', channel: 'general' }));
+
+// Mark channel as read up to specific message
+ws.send(JSON.stringify({ cmd: 'unreads_ack', channel: 'general', message_id: 'msg_456' }));
+
+// Mark thread as read
+ws.send(JSON.stringify({ cmd: 'unreads_ack', thread_id: 'thread_123' }));
+```
+
+### Get Unread Count for Single Channel/Thread
+
+```javascript
+ws.send(JSON.stringify({ cmd: 'unreads_count', channel: 'general' }));
+
+// Response:
+// {
+//   cmd: 'unreads_count',
+//   channel: 'general',
+//   unread_count: 5,
+//   last_read: 'msg_123',
+//   total_messages: 100
+// }
+```
+
+### Auto-Ack on Fetch
+
+When you call `messages_get`, the server automatically marks the channel/thread as read up to the latest message. This is synced across all your connections.
+
+### Listen for Unread Updates
+
+```javascript
+function handleMessage(data) {
+  if (data.cmd === 'unreads_update') {
+    // Another connection updated read state
+    console.log('Read state updated:', data.channel || data.thread_id, data.last_read);
+  }
+}
+```
+
+---
+
 ## Best Practices
 
 1. **Reconnect on disconnect** - Handle WebSocket close events

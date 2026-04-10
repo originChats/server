@@ -178,19 +178,22 @@ def is_type_allowed(mime_type: str) -> bool:
 
 
 def _save_image_with_compression(image, filepath, mime_type, compression_config):
+    width, height = image.width, image.height
+    
     if not compression_config.get("enabled", True):
         for key in list(image.info.keys()):
             if isinstance(key, str) and key.lower() in ["exif", "gps", "location", "geotag"]:
                 del image.info[key]
         save_kwargs = {"quality": 95} if image.format == "JPEG" else {}
         image.save(filepath, **save_kwargs)
-        return
+        return width, height
 
     max_width = compression_config.get("max_width", IMAGE_MAX_WIDTH)
     max_height = compression_config.get("max_height", IMAGE_MAX_HEIGHT)
 
     if image.width > max_width or image.height > max_height:
         image.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
+        width, height = image.width, image.height
 
     if image.mode in ("RGBA", "P") and (image.format == "JPEG" or mime_type == "image/jpeg"):
         if image.mode == "P":
@@ -213,20 +216,23 @@ def _save_image_with_compression(image, filepath, mime_type, compression_config)
         save_kwargs["compress_level"] = compression_config.get("png_compression", PNG_COMPRESSION)
 
     image.save(filepath, **save_kwargs)
+    return width, height
 
 
 def _save_file_bytes(file_bytes, filepath, mime_type, compression_config=None):
     if not (mime_type.startswith("image/") and mime_type != "image/svg+xml"):
         with open(filepath, "wb") as f:
             f.write(file_bytes)
-        return
+        return None, None
 
     try:
         image = Image.open(BytesIO(file_bytes))
-        _save_image_with_compression(image, filepath, mime_type, compression_config or {})
+        width, height = _save_image_with_compression(image, filepath, mime_type, compression_config or {})
+        return width, height
     except Exception:
         with open(filepath, "wb") as f:
             f.write(file_bytes)
+        return None, None
 
 
 def save_attachment(
@@ -321,8 +327,9 @@ def save_attachment(
 
         compression_config: Dict[str, Any] = get_config_value("attachments", "compression", default={})
         Logger.info(f"Attempting to save attachment file: {filepath}, compression enabled: {compression_config.get('enabled', True)}")
+        width, height = None, None
         try:
-            _save_file_bytes(file_bytes, filepath, mime_type, compression_config)
+            width, height = _save_file_bytes(file_bytes, filepath, mime_type, compression_config)
             Logger.success(f"Attachment file saved successfully: {filepath}")
         except Exception as e:
             Logger.error(f"Failed to save attachment file: {e}")
@@ -365,6 +372,9 @@ def save_attachment(
         "permanent": permanent,
         "referenced": False,
     }
+    if width is not None and height is not None:
+        attachment["width"] = width
+        attachment["height"] = height
 
     attachments[attachment_id] = attachment
     _hash_index[file_hash] = attachment_id
@@ -482,7 +492,7 @@ def get_user_attachments(uploader_id: str) -> List[Dict[str, Any]]:
 
 
 def get_attachment_info_for_client(attachment: Dict[str, Any], base_url: str = "") -> Dict[str, Any]:
-    return {
+    info = {
         "id": attachment["id"],
         "name": attachment.get("original_name", "file"),
         "mime_type": attachment["mime_type"],
@@ -491,6 +501,11 @@ def get_attachment_info_for_client(attachment: Dict[str, Any], base_url: str = "
         "expires_at": attachment.get("expires_at"),
         "permanent": attachment.get("permanent", False),
     }
+    if "width" in attachment:
+        info["width"] = attachment["width"]
+    if "height" in attachment:
+        info["height"] = attachment["height"]
+    return info
 
 
 def mark_attachment_referenced(attachment_id: str) -> bool:

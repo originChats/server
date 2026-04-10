@@ -19,6 +19,7 @@ from handlers.messages.message_edit import handle_message_edit
 from handlers.messages.message_delete import handle_message_delete
 from handlers.messages.message_pin import handle_message_pin, handle_message_unpin, handle_messages_pinned
 from handlers.messages.messages import handle_messages_get, handle_messages_around, handle_messages_search, handle_message_get, handle_message_replies
+from handlers.messages.unreads import handle_unreads_ack, handle_unreads_get, handle_unreads_count
 from logger import Logger
 from handlers.websocket_utils import broadcast_to_voice_channel_with_viewers, broadcast_to_all, _get_ws_attr, _set_ws_attr
 from handlers import push as push_handler
@@ -236,6 +237,12 @@ async def handle(ws, message, server_data: dict) -> dict | None:
             return await handle_pfp_set(ws, message, server_data)
         case "pfp_get":
             return await handle_pfp_get(ws, message, server_data)
+        case "unreads_ack":
+            return await handle_unreads_ack(ws, message, server_data)
+        case "unreads_get":
+            return await handle_unreads_get(ws, message, server_data)
+        case "unreads_count":
+            return await handle_unreads_count(ws, message, server_data)
         case _:
             return _error(f"Unknown command: {message.get('cmd')}", match_cmd)
 

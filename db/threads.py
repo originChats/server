@@ -23,9 +23,20 @@ _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 threads_db_dir = os.path.join(_MODULE_DIR, "threads")
 thread_messages_dir = os.path.join(_MODULE_DIR, "threadMessages")
 
+MESSAGE_PADDING_SIZE = 512
+
 _lock = threading.RLock()
+_thread_locks: Dict[str, threading.RLock] = {}
 _threads_cache: Dict[str, dict] = {}
 _messages_cache: Dict[str, dict] = {}
+
+
+def _get_thread_lock(thread_id: str) -> threading.RLock:
+    if thread_id not in _thread_locks:
+        with _lock:
+            if thread_id not in _thread_locks:
+                _thread_locks[thread_id] = threading.RLock()
+    return _thread_locks[thread_id]
 
 
 def _ensure_storage():
@@ -151,6 +162,39 @@ def _full_rewrite_messages(thread_id: str):
     cache["lengths"] = lengths
 
 
+def _patch_line_in_place(thread_id: str, idx: int, new_serialised: str) -> bool:
+    cache = _messages_cache.get(thread_id)
+    if cache is None or cache.get("offsets") is None:
+        return False
+
+    offsets = cache["offsets"]
+    lengths = cache["lengths"]
+
+    if idx >= len(offsets):
+        return False
+
+    new_bytes = new_serialised.encode("utf-8")
+    orig_len = lengths[idx]
+
+    if len(new_bytes) > orig_len:
+        return False
+
+    padding = orig_len - len(new_bytes)
+    if padding > 0:
+        new_bytes = new_bytes + b" " * padding
+
+    messages_file = _get_messages_file_path(thread_id)
+    try:
+        with open(messages_file, "r+b") as f:
+            f.seek(offsets[idx])
+            f.write(new_bytes)
+            f.flush()
+            os.fsync(f.fileno())
+        return True
+    except OSError:
+        return False
+
+
 def create_thread(parent_channel: str, name: str, creator: str) -> dict:
     thread_id = str(uuid.uuid4())
 
@@ -233,7 +277,7 @@ def get_thread_messages(thread_id: str, start=0, limit=100) -> List[dict]:
 
 def save_thread_message(thread_id: str, message: dict, sync: bool = True) -> bool:
     """Save a message to a thread.
-    
+
     Args:
         thread_id: ID of the thread
         message: Message dict to save
@@ -243,21 +287,22 @@ def save_thread_message(thread_id: str, message: dict, sync: bool = True) -> boo
     cache = _get_thread_messages_cache(thread_id)
     messages = cache["messages"]
 
-    serialised = json.dumps(message, separators=(',', ':'), ensure_ascii=False)
-    serialised_bytes = serialised.encode('utf-8')
+    serialised = json.dumps(message, separators=(",", ":"), ensure_ascii=False)
+    serialised_bytes = serialised.encode("utf-8")
+    padded_bytes = serialised_bytes + b" " * MESSAGE_PADDING_SIZE
 
     try:
-        with open(messages_file, 'rb') as f:
+        with open(messages_file, "rb") as f:
             first_byte = f.read(1)
     except FileNotFoundError:
         first_byte = None
 
     if first_byte is not None:
         new_offset = cache["offsets"][-1] + cache["lengths"][-1] + 1 if messages else 0
-        prefix = b'\n' if messages else b''
+        prefix = b"\n" if messages else b""
 
-        with open(messages_file, 'ab') as f:
-            f.write(prefix + serialised_bytes)
+        with open(messages_file, "ab") as f:
+            f.write(prefix + padded_bytes)
             if sync:
                 f.flush()
                 os.fsync(f.fileno())
@@ -266,10 +311,10 @@ def save_thread_message(thread_id: str, message: dict, sync: bool = True) -> boo
         messages.append(message)
         cache["id_to_idx"][message["id"]] = idx
         cache["offsets"].append(new_offset)
-        cache["lengths"].append(len(serialised_bytes))
+        cache["lengths"].append(len(padded_bytes))
     else:
-        with open(messages_file, 'w') as f:
-            f.write(serialised)
+        with open(messages_file, "wb") as f:
+            f.write(padded_bytes)
             if sync:
                 f.flush()
                 os.fsync(f.fileno())
@@ -277,7 +322,7 @@ def save_thread_message(thread_id: str, message: dict, sync: bool = True) -> boo
         messages.append(message)
         cache["id_to_idx"][message["id"]] = 0
         cache["offsets"] = [0]
-        cache["lengths"] = [len(serialised_bytes)]
+        cache["lengths"] = [len(padded_bytes)]
 
     return True
 
@@ -323,51 +368,57 @@ def get_thread_message_by_id(thread_id: str, message_id: str) -> Optional[dict]:
 
 
 def add_reaction_to_thread_message(thread_id: str, message_id: str, emoji: str, user_id: str) -> bool:
-    cache = _get_thread_messages_cache(thread_id)
-    messages = cache["messages"]
-    idx = cache["id_to_idx"].get(message_id)
+    with _get_thread_lock(thread_id):
+        cache = _get_thread_messages_cache(thread_id)
+        messages = cache["messages"]
+        idx = cache["id_to_idx"].get(message_id)
 
-    if idx is None:
-        return False
+        if idx is None:
+            return False
 
-    msg = messages[idx] = messages[idx].copy()
-    if "reactions" not in msg:
-        msg["reactions"] = {}
+        msg = messages[idx] = messages[idx].copy()
+        if "reactions" not in msg:
+            msg["reactions"] = {}
 
-    if emoji not in msg["reactions"]:
-        msg["reactions"][emoji] = []
+        if emoji not in msg["reactions"]:
+            msg["reactions"][emoji] = []
 
-    if user_id in msg["reactions"][emoji]:
-        return False
+        if user_id in msg["reactions"][emoji]:
+            return False
 
-    msg["reactions"][emoji].append(user_id)
-    _full_rewrite_messages(thread_id)
-    return True
+        msg["reactions"][emoji].append(user_id)
+        serialised = json.dumps(msg, separators=(",", ":"), ensure_ascii=False)
+        if not _patch_line_in_place(thread_id, idx, serialised):
+            _full_rewrite_messages(thread_id)
+        return True
 
 
 def remove_reaction_from_thread_message(thread_id: str, message_id: str, emoji: str, user_id: str) -> bool:
-    cache = _get_thread_messages_cache(thread_id)
-    messages = cache["messages"]
-    idx = cache["id_to_idx"].get(message_id)
+    with _get_thread_lock(thread_id):
+        cache = _get_thread_messages_cache(thread_id)
+        messages = cache["messages"]
+        idx = cache["id_to_idx"].get(message_id)
 
-    if idx is None:
+        if idx is None:
+            return False
+
+        msg = messages[idx] = messages[idx].copy()
+        if "reactions" not in msg or emoji not in msg["reactions"]:
+            return False
+
+        if user_id in msg["reactions"][emoji]:
+            msg["reactions"][emoji].remove(user_id)
+            if not msg["reactions"][emoji]:
+                del msg["reactions"][emoji]
+            if not msg["reactions"]:
+                del msg["reactions"]
+
+            serialised = json.dumps(msg, separators=(",", ":"), ensure_ascii=False)
+            if not _patch_line_in_place(thread_id, idx, serialised):
+                _full_rewrite_messages(thread_id)
+            return True
+
         return False
-
-    msg = messages[idx] = messages[idx].copy()
-    if "reactions" not in msg or emoji not in msg["reactions"]:
-        return False
-
-    if user_id in msg["reactions"][emoji]:
-        msg["reactions"][emoji].remove(user_id)
-        if not msg["reactions"][emoji]:
-            del msg["reactions"][emoji]
-        if not msg["reactions"]:
-            del msg["reactions"]
-
-        _full_rewrite_messages(thread_id)
-        return True
-
-    return False
 
 
 def archive_thread(thread_id: str) -> bool:

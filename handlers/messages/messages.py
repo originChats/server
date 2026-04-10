@@ -1,5 +1,6 @@
 from db import channels, threads, users
 from handlers.websocket_utils import _get_ws_attr
+from handlers.messages.unreads import auto_ack_on_messages_get
 from handlers.helpers.validation import (
     make_error as _error,
     require_user_id as _require_user_id,
@@ -40,6 +41,7 @@ async def handle_messages_get(ws, message, server_data):
     if is_thread and thread_id:
         messages = threads.get_thread_messages(thread_id, start, limit)
         messages = threads.convert_messages_to_user_format(messages)
+        await auto_ack_on_messages_get(ws, parent_channel, thread_id, user_id, server_data)
         return {"cmd": "messages_get", "channel": parent_channel, "thread_id": thread_id, "messages": messages, "range": {"start": start, "end": end}}
     else:
         _, error = _require_text_channel_access(user_id, channel_name)
@@ -47,6 +49,7 @@ async def handle_messages_get(ws, message, server_data):
             return error
         messages = channels.get_channel_messages(channel_name, start, limit)
         messages = channels.convert_messages_to_user_format(messages)
+        await auto_ack_on_messages_get(ws, channel_name, None, user_id, server_data)
         return {"cmd": "messages_get", "channel": channel_name, "messages": messages, "range": {"start": start, "end": end}}
 
 

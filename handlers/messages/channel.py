@@ -19,6 +19,7 @@ def handle_channels_get(ws, message, match_cmd, server_data):
                 msgs = channels.get_channel_messages(channel_name, 0, 1)
                 msg = msgs[0] if msgs else {}
                 channel["last_message"] = msg.get("timestamp")
+                channel["last_message_id"] = msg.get("id")
             elif channel.get("type") == "voice":
                 channel_name = channel.get("name")
                 participants = []

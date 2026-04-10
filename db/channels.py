@@ -19,6 +19,8 @@ _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 channels_db_dir = os.path.join(_MODULE_DIR, "channels")
 channels_index = os.path.join(_MODULE_DIR, "channels.json")
 
+MESSAGE_PADDING_SIZE = 512
+
 DEFAULT_PERMISSIONS = {
     "view": ["owner"],
     "send": ["owner"],
@@ -400,6 +402,7 @@ def save_channel_message(channel_name, message, sync: bool = True):
 
         serialised = json.dumps(message, separators=(",", ":"), ensure_ascii=False)
         serialised_bytes = serialised.encode("utf-8")
+        padded_bytes = serialised_bytes + b" " * MESSAGE_PADDING_SIZE
 
         try:
             with open(channel_file, "rb") as f:
@@ -426,7 +429,7 @@ def save_channel_message(channel_name, message, sync: bool = True):
 
             prefix = b"\n" if messages else b""
             with open(channel_file, "ab") as f:
-                f.write(prefix + serialised_bytes)
+                f.write(prefix + padded_bytes)
                 if sync:
                     f.flush()
                     os.fsync(f.fileno())
@@ -436,13 +439,13 @@ def save_channel_message(channel_name, message, sync: bool = True):
             cache["id_to_idx"][message["id"]] = idx
             if cache["offsets"] is not None and new_offset is not None:
                 cache["offsets"].append(new_offset)
-                cache["lengths"].append(len(serialised_bytes))
+                cache["lengths"].append(len(padded_bytes))
             elif cache["offsets"] is None:
                 _rebuild_offsets(channel_name)
         else:
             tmp = channel_file + ".tmp"
             with open(tmp, "wb") as f:
-                f.write(serialised_bytes)
+                f.write(padded_bytes)
                 if sync:
                     f.flush()
                     os.fsync(f.fileno())
@@ -452,7 +455,7 @@ def save_channel_message(channel_name, message, sync: bool = True):
             cache["id_to_idx"][message["id"]] = 0
             if cache["offsets"] is not None:
                 cache["offsets"] = [0]
-                cache["lengths"] = [len(serialised_bytes)]
+                cache["lengths"] = [len(padded_bytes)]
 
         return True
 

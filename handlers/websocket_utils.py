@@ -187,6 +187,31 @@ async def disconnect_user(connected_clients, identifier, reason="User disconnect
     return len(disconnected)
 
 
+async def broadcast_to_user(connected_clients, username, message, server_data=None):
+    """Broadcast a message to all connections of a specific user"""
+    from db import users
+
+    target_user_id = users.get_id_by_username(username)
+    if not target_user_id:
+        target_user_id = username
+
+    disconnected = set()
+    clients_copy = connected_clients.copy()
+
+    for ws in clients_copy:
+        ws_data = _get_ws_data(ws)
+        ws_user_id = ws_data.get("user_id")
+        if ws_user_id == target_user_id:
+            success = await send_to_client(ws, message)
+            if not success:
+                disconnected.add(ws)
+
+    for ws in disconnected:
+        connected_clients.discard(ws)
+
+    return disconnected
+
+
 async def broadcast_to_voice_channel_with_viewers(connected_clients, voice_channels, participant_message, viewer_message, channel_name, server_data=None):
     """Broadcast to voice channel participants (with peer_id) AND to channel viewers (without peer_id)"""
     from db import channels, users
