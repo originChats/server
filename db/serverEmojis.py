@@ -156,7 +156,7 @@ def _download_emoji(b64_image: str) -> str | None:
         Logger.error(f"Failed to save image: {e}")
         return None
     
-def _add_emoji_by_filepath(name: str, file_name: str) -> Optional[str]:
+def _add_emoji_by_filepath(name: str, filepath: str) -> Optional[str]:
     """
     Add a server emoji metadata entry assuming emoji has been downloaded.
 
@@ -172,6 +172,8 @@ def _add_emoji_by_filepath(name: str, file_name: str) -> Optional[str]:
         return None
     if not re.fullmatch(r"[A-Za-z0-9_]{1,64}", cleaned_name):
         return None
+    
+    file_name = os.path.basename(filepath)
     if not file_name or not is_allowed_file_type(file_name):
         return None
 
