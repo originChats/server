@@ -4,6 +4,7 @@ from handlers.helpers.validation import (
     require_user_id as _require_user_id,
     require_user_roles as _require_user_roles,
 )
+import re
 
 
 async def handle_react_add(ws, message, match_cmd, _get_channel_or_thread_context):
@@ -25,6 +26,9 @@ async def handle_react_add(ws, message, match_cmd, _get_channel_or_thread_contex
 
     if not message_id or not emoji_str:
         return _error("Message ID and emoji are required", match_cmd)
+    
+    if len(emoji_str) > 5 or not re.match(r"^originChats:\/\/[\w\d_.]+\/emojis\/\d+$", emoji_str):
+        return _error("Invalid emoji", match_cmd)
 
     ctx, err = await _get_channel_or_thread_context(channel_name, thread_id, user_id, user_roles)
     if err:
