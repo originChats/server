@@ -15,14 +15,38 @@ def extract_role_mentions(content):
 
 
 def get_ping_patterns_for_user(username, user_roles):
-    patterns = [f"@{username}", f"@{username}@", f"@{username} "]
+    escaped = re.escape(username)
+    patterns = [re.compile(rf'@{escaped}(?![a-zA-Z0-9_])')]
     for role in user_roles:
-        patterns.extend([f"@&{role}", f"@&{role}@", f"@&{role} "])
+        escaped_role = re.escape(role)
+        patterns.append(re.compile(rf'@&{escaped_role}(?![a-zA-Z0-9_])'))
     return patterns
 
 
 def check_ping_in_content(content, ping_patterns):
-    return any(pattern in content for pattern in ping_patterns)
+    return any(pattern.search(content) for pattern in ping_patterns)
+
+
+def is_message_pinged_for_user(msg, user_id, username, user_roles, ping_patterns):
+    stored_pings = msg.get("pings")
+    if stored_pings:
+        if username in (stored_pings.get("users") or []):
+            return True
+        if any(role in (stored_pings.get("roles") or []) for role in user_roles):
+            return True
+        if user_id in (stored_pings.get("replies") or []):
+            return True
+
+    content = msg.get("content", "")
+    if content and check_ping_in_content(content, ping_patterns):
+        return True
+
+    reply_to = msg.get("reply_to")
+    is_replied = reply_to and reply_to.get("user") == user_id
+    if is_replied and msg.get("ping", True):
+        return True
+
+    return False
 
 
 def validate_role_mentions_permissions(content, sender_user_roles):

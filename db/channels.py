@@ -378,6 +378,16 @@ def get_channel_messages(channel_name, start, limit):
         return list(channel_data[begin:end])
 
 
+def get_all_channel_messages(channel_name):
+    """Return all messages for a channel without the 200-message limit cap."""
+    with _get_channel_lock(channel_name):
+        cache = _get_channel_cache(channel_name)
+        channel_data = cache["messages"]
+        if not channel_data:
+            return []
+        return [msg.copy() for msg in channel_data]
+
+
 def get_channel_messages_around(
     channel_name: str, message_id: str, above: int = 50, below: int = 50
 ) -> Tuple[Optional[List[dict]], Optional[int], Optional[int]]:
@@ -728,7 +738,7 @@ def unpin_channel_message(channel_name, message_id):
 def get_pinned_messages(channel_name):
     with _get_channel_lock(channel_name):
         cache = _get_channel_cache(channel_name)
-        return [msg.copy() for msg in cache["messages"] if msg.get("pinned")]
+        return [msg.copy() for msg in reversed(cache["messages"]) if msg.get("pinned")]
 
 
 def reload_channels():
@@ -839,7 +849,7 @@ def search_channel_messages(channel_name, query, limit=50):
         messages = cache["messages"]
         results = []
         query_lower = query.lower()
-        for msg in messages:
+        for msg in reversed(messages):
             content = msg.get("content", "")
             if query_lower in content.lower():
                 results.append(msg.copy())

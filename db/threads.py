@@ -275,6 +275,15 @@ def get_thread_messages(thread_id: str, start=0, limit=100) -> List[dict]:
     return list(messages[begin:end])
 
 
+def get_all_thread_messages(thread_id: str) -> List[dict]:
+    """Return all messages for a thread without the 200-message limit cap."""
+    cache = _get_thread_messages_cache(thread_id)
+    messages = cache["messages"]
+    if not messages:
+        return []
+    return [msg.copy() for msg in messages]
+
+
 def save_thread_message(thread_id: str, message: dict, sync: bool = True) -> bool:
     """Save a message to a thread.
 

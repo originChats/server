@@ -39,7 +39,7 @@ from handlers.helpers.thread import (
 )
 from handlers.helpers.mentions import (
     get_ping_patterns_for_user,
-    check_ping_in_content,
+    is_message_pinged_for_user,
 )
 
 async def _broadcast_voice_event(connected_clients, voice_channels, channel_name, event_type, user_data_with_peer, user_data_without_peer=None):
@@ -609,29 +609,34 @@ async def _handle_pings_get(ws, message, match_cmd):
     all_channels = channels.get_channels()
     pinged_messages = []
     for channel_data in all_channels:
-        if channel_data.get("type") != "text":
+        if channel_data.get("type") not in ("text", "forum"):
             continue
         channel_name = channel_data.get("name")
         if not channels.does_user_have_permission(channel_name, user_roles, "view"):
             continue
-        channel_messages = channels.get_channel_messages(channel_name, 0, 10000)
-        if not channel_messages:
-            continue
+        channel_messages = channels.get_all_channel_messages(channel_name)
         for msg in channel_messages:
-            content = msg.get("content", "")
-            is_mentioned = check_ping_in_content(content, ping_patterns)
-            reply_to = msg.get("reply_to")
-            is_replied = reply_to and reply_to.get("user") == user_id
-            if is_replied and not msg.get("ping", True):
-                continue
-            if is_mentioned or is_replied:
-                pinged_messages.append((msg, channel_name))
-
+            if is_message_pinged_for_user(msg, user_id, username, user_roles, ping_patterns):
+                pinged_messages.append((msg, channel_name, None))
+        if channel_data.get("type") == "forum" and channel_name:
+            channel_threads = threads.get_channel_threads(channel_name)
+            for thread_meta in channel_threads:
+                thread_id = thread_meta.get("id")
+                if not thread_id:
+                    continue
+                thread_messages = threads.get_all_thread_messages(thread_id)
+                for msg in thread_messages:
+                    if is_message_pinged_for_user(msg, user_id, username, user_roles, ping_patterns):
+                        pinged_messages.append((msg, channel_name, thread_id))
     pinged_messages.sort(key=lambda x: x[0].get("timestamp", 0), reverse=True)
     paginated = pinged_messages[offset:offset + limit]
     result = []
-    for msg, ch_name in paginated:
-        converted = channels.convert_messages_to_user_format([msg])[0]
+    for msg, ch_name, th_id in paginated:
+        if th_id:
+            converted = threads.convert_messages_to_user_format([msg])[0]
+            converted["thread_id"] = th_id
+        else:
+            converted = channels.convert_messages_to_user_format([msg])[0]
         converted["channel"] = ch_name
         result.append(converted)
     return {"cmd": "pings_get", "messages": result, "offset": offset, "limit": limit, "total": len(pinged_messages)}

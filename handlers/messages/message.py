@@ -69,6 +69,7 @@ async def handle_message_new(ws, message, server_data):
     if not is_valid:
         return _error(error_msg, match_cmd)
 
+    parent_channel = None
     if thread_id:
         thread_data = threads.get_thread(thread_id)
         if not thread_data:
@@ -142,6 +143,8 @@ async def handle_message_new(ws, message, server_data):
         att_ids = [a["id"] for a in validated_attachments]
         attachments_db.mark_attachments_referenced(att_ids)
 
+    effective_channel = channel_name if not thread_id else (channel_name or parent_channel)
+
     if thread_id:
         threads.save_thread_message(thread_id, out_msg)
         out_msg_for_client = threads.convert_messages_to_user_format([out_msg])[0]
@@ -191,25 +194,25 @@ async def handle_message_new(ws, message, server_data):
     for mentioned_username in (pings.get("users") or set()):
         if mentioned_username != username and server_data and not push_handler.is_user_online(mentioned_username, server_data):
             push_handler.send_push_notification(
-                username=mentioned_username, title=f"#{channel_name} — {username}",
-                body=content, extra_data={"channelName": channel_name})
+                username=mentioned_username, title=f"#{effective_channel} — {username}",
+                body=content, extra_data={"channelName": effective_channel})
 
     for mentioned_role in (pings.get("roles") or []):
         for member_username in users.get_usernames_by_role(mentioned_role):
             if member_username != username and server_data and not push_handler.is_user_online(member_username, server_data):
                 push_handler.send_push_notification(
-                    username=member_username, title=f"#{channel_name} — {username} mentioned @{mentioned_role}",
-                    body=content, extra_data={"channelName": channel_name})
+                    username=member_username, title=f"#{effective_channel} — {username} mentioned @{mentioned_role}",
+                    body=content, extra_data={"channelName": effective_channel})
 
     if reply_to and replied_message and reply_author_id:
         original_author = users.get_username_by_id(reply_author_id)
         if message.get("ping", True) and original_author and original_author != username:
             if not push_handler.is_user_online(original_author, server_data):
                 push_handler.send_push_notification(
-                    username=original_author, title=f"#{channel_name} — {username} replied",
-                    body=content, extra_data={"channelName": channel_name})
+                    username=original_author, title=f"#{effective_channel} — {username} replied",
+                    body=content, extra_data={"channelName": effective_channel})
 
-    return {"cmd": "message_new", "message": out_msg_for_client, "channel": channel_name,
+    return {"cmd": "message_new", "message": out_msg_for_client, "channel": effective_channel,
             "thread_id": thread_id if thread_id else None, "global": True}
 
 
