@@ -9,7 +9,9 @@ Update thread properties like name, locked, or archived status.
     "cmd": "thread_update",
     "thread_id": "uuid-here",
     "name": "New Thread Title",
-    "archived": true
+    "archived": true,
+    "last_message": 1234567900.456,
+    "last_message_id": "msg_uuid_here"
 }
 ```
 

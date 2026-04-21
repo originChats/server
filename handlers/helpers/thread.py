@@ -11,19 +11,19 @@ def validate_thread_access(
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict]]:
     """
     Validate thread access with authentication and permission checks.
-    
+
     Handles:
     - User authentication
     - Thread ID extraction and validation
     - Thread existence check
     - Permission validation
-    
+
     Args:
         ws: WebSocket connection
         message: The message dict containing thread_id
         match_cmd: The command name for error reporting
         require_view_permission: Whether to check view permission
-    
+
     Returns:
         (context, error) tuple where:
         - context: Dict with thread_data, user_id, user_roles, parent_channel, is_thread=True
@@ -32,28 +32,28 @@ def validate_thread_access(
     user_id, error = _require_user_id(ws, "Authentication required")
     if error:
         return None, error
-    
+
     if not user_id:
         return None, _error("User ID is required", match_cmd)
-    
+
     thread_id = message.get("thread_id")
     if not thread_id:
         return None, _error("Thread ID is required", match_cmd)
-    
+
     thread_data = threads.get_thread(thread_id)
     if not thread_data:
         return None, _error("Thread not found", match_cmd)
-    
+
     user_roles = users.get_user_roles(user_id)
     if not user_roles:
         return None, _error("User roles not found", match_cmd)
-    
+
     parent_channel = thread_data.get("parent_channel")
-    
+
     if require_view_permission:
         if not channels.does_user_have_permission(parent_channel, user_roles, "view"):
             return None, _error("You do not have permission to view this thread", match_cmd)
-    
+
     return {
         "thread_data": thread_data,
         "user_id": user_id,
@@ -71,16 +71,16 @@ def validate_thread_modification(
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict]]:
     """
     Validate thread modification (delete/update) with ownership checks.
-    
+
     Handles:
     - All checks from validate_thread_access
     - Ownership verification (thread creator or manage_threads permission)
-    
+
     Args:
         ws: WebSocket connection
         message: The message dict containing thread_id
         match_cmd: The command name for error reporting
-    
+
     Returns:
         (context, error) tuple where:
         - context: Dict with thread_data, user_id, user_roles, parent_channel, thread_id, is_thread=True
@@ -105,23 +105,30 @@ def validate_thread_modification(
 def format_thread_for_response(thread_data: dict, include_participants: bool = True) -> dict:
     """
     Format thread data for client response.
-    
+
     Args:
         thread_data: Raw thread data from database
         include_participants: Whether to include participant usernames
-    
+
     Returns:
         Formatted thread dict
     """
     thread_copy = thread_data.copy() if thread_data else {}
-    
+
     if "created_by" in thread_copy:
         thread_copy["created_by"] = users.get_username_by_id(thread_copy["created_by"])
-    
+
     if include_participants and "participants" in thread_copy:
         thread_copy["participants"] = [
-            users.get_username_by_id(pid) 
+            users.get_username_by_id(pid)
             for pid in thread_copy.get("participants", [])
         ]
-    
+
+    thread_id = thread_copy.get("id")
+    if thread_id:
+        msgs = threads.get_thread_messages(thread_id, 0, 1)
+        msg = msgs[0] if msgs else {}
+        thread_copy["last_message"] = msg.get("timestamp")
+        thread_copy["last_message_id"] = msg.get("id")
+
     return thread_copy

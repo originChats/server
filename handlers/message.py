@@ -748,7 +748,8 @@ def _handle_thread_update(ws, message, match_cmd):
     if updates:
         threads.update_thread(thread_id, updates)
 
-    return {"cmd": "thread_update", "thread": threads.get_thread(thread_id), "global": True}
+    updated_thread = threads.get_thread(thread_id)
+    return {"cmd": "thread_update", "thread": format_thread_for_response(updated_thread) if updated_thread else {}, "global": True}
 
 
 def _handle_thread_join(ws, message, match_cmd):

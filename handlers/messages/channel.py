@@ -37,6 +37,12 @@ def handle_channels_get(ws, message, match_cmd, server_data):
                         thread["participants"] = [users.get_username_by_id(pid) for pid in thread["participants"]]
                     if "created_by" in thread:
                         thread["created_by"] = users.get_username_by_id(thread["created_by"]) or thread["created_by"]
+                    _thread_id = thread.get("id")
+                    if _thread_id:
+                        _t_msgs = threads.get_thread_messages(_thread_id, 0, 1)
+                        _t_msg = _t_msgs[0] if _t_msgs else {}
+                        thread["last_message"] = _t_msg.get("timestamp")
+                        thread["last_message_id"] = _t_msg.get("id")
                 channel["threads"] = channel_threads
 
     return {"cmd": "channels_get", "val": channels_list}

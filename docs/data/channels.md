@@ -76,7 +76,9 @@ Forum channels are special channels where users cannot send messages directly. I
             "created_by": "admin",
             "created_at": 1234567890.123,
             "locked": false,
-            "archived": false
+            "archived": false,
+            "last_message": 1234567900.456,
+            "last_message_id": "msg_uuid_here"
         }
     ]
 }

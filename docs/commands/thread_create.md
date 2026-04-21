@@ -33,7 +33,9 @@ Create a new thread in a forum channel.
         "created_by": "alice",
         "created_at": 1234567890.123,
         "locked": false,
-        "archived": false
+        "archived": false,
+        "last_message": null,
+        "last_message_id": null
     },
     "channel": "announcements",
     "global": true

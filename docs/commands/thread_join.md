@@ -32,7 +32,9 @@ Join a thread in a forum channel.
     "created_at": 1234567890.123,
     "locked": false,
     "archived": false,
-    "participants": ["alice", "bob"]
+    "participants": ["alice", "bob"],
+    "last_message": 1234567900.456,
+    "last_message_id": "msg_uuid_here"
   },
   "thread_id": "uuid-here",
   "user": "bob",

@@ -97,7 +97,20 @@ No additional parameters required.
   - `react`: Roles that can add/remove reactions (optional)
   - `pin`: Roles that can pin messages (optional)
 - `voice_state`: (**Only on voice channels**) Array of other users currently in the voice channel
-- `threads`: (**Only on forum channels**) Array of threads in the channel
+- `threads`: (**Only on forum channels**) Array of threads in the channel (includes `last_message` and `last_message_id`)
+
+### Thread Object Fields (within forum channels)
+
+- `id`: Thread UUID
+- `name`: Thread name
+- `parent_channel`: Name of the parent forum channel
+- `created_by`: Username of the thread creator
+- `created_at`: Unix timestamp of thread creation
+- `locked`: Whether the thread is locked
+- `archived`: Whether the thread is archived
+- `participants`: Array of participant usernames
+- `last_message`: Timestamp of the most recent message in the thread (or `null` if empty)
+- `last_message_id`: ID of the most recent message in the thread (or `null` if empty)
 
 ### Voice State Fields
 
