@@ -65,7 +65,7 @@ def text_response(text: str, status: int = 200, content_type: str = "text/plain"
     return _apply_cors(web.Response(status=status, text=text, content_type=content_type))
 
 
-def file_response(file_path: str, cache_max_age: int = 3600, content_type: Optional[str] = None) -> web.Response:
+def file_response(file_path: str, cache_max_age: int = 3600, content_type: Optional[str] = None) -> web.FileResponse:
     """
     Create a CORS-enabled file response with caching.
     
