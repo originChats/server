@@ -1,4 +1,5 @@
 from typing import Optional
+
 from db import channels, threads, users, unreads
 from handlers.websocket_utils import _get_ws_attr, _set_ws_attr, broadcast_to_user
 from handlers.helpers.validation import (
@@ -31,7 +32,6 @@ async def handle_unreads_ack(ws, message, server_data):
     if err:
         msg, key = err
         return _error(msg, match_cmd)
-
     if not ctx:
         return _error("Channel or thread not found", match_cmd)
 
@@ -48,8 +48,8 @@ async def handle_unreads_ack(ws, message, server_data):
 
         if last_read:
             unreads.set_last_read(user_id, last_read, thread_id=thread_id)
+            await _broadcast_unreads_update(ws, server_data, user_id, None, thread_id, last_read)
 
-        await _broadcast_unreads_update(ws, server_data, user_id, None, thread_id, last_read)
         return {"cmd": "unreads_ack", "thread_id": thread_id, "last_read": last_read}
     else:
         last_read = None
@@ -62,8 +62,8 @@ async def handle_unreads_ack(ws, message, server_data):
 
         if last_read:
             unreads.set_last_read(user_id, last_read, channel=channel)
+            await _broadcast_unreads_update(ws, server_data, user_id, channel, None, last_read)
 
-        await _broadcast_unreads_update(ws, server_data, user_id, channel, None, last_read)
         return {"cmd": "unreads_ack", "channel": channel, "last_read": last_read}
 
 
@@ -78,6 +78,7 @@ async def handle_unreads_get(ws, message, server_data):
         return _error("User roles not found", match_cmd)
 
     all_unreads = unreads.get_all_last_reads(user_id)
+
     result = {}
 
     all_channels = channels.get_all_channels_for_roles(user_roles)
@@ -97,6 +98,7 @@ async def handle_unreads_get(ws, message, server_data):
                 if msg.get("id") == last_read:
                     unread_count = len(messages) - i - 1
                     break
+
             result[channel_name] = {
                 "last_read": last_read,
                 "unread_count": unread_count,
@@ -108,6 +110,37 @@ async def handle_unreads_get(ws, message, server_data):
                 "unread_count": msg_count,
                 "total_messages": msg_count
             }
+
+        channel_threads = threads.get_channel_threads(channel_name)
+        for thread_data in channel_threads:
+            thread_id = thread_data.get("id")
+            if not thread_id:
+                continue
+            thread_key = f"thread/{thread_id}"
+            thread_last_read = all_unreads.get(thread_key)
+            thread_messages = threads.get_thread_messages(thread_id, 0, 10000)
+            thread_msg_count = len(thread_messages)
+
+            if thread_last_read:
+                thread_unread_count = thread_msg_count
+                for i, msg in enumerate(thread_messages):
+                    if msg.get("id") == thread_last_read:
+                        thread_unread_count = len(thread_messages) - i - 1
+                        break
+
+                result[thread_key] = {
+                    "last_read": thread_last_read,
+                    "unread_count": thread_unread_count,
+                    "total_messages": thread_msg_count,
+                    "parent_channel": channel_name
+                }
+            else:
+                result[thread_key] = {
+                    "last_read": None,
+                    "unread_count": thread_msg_count,
+                    "total_messages": thread_msg_count,
+                    "parent_channel": channel_name
+                }
 
     return {"cmd": "unreads_get", "unreads": result}
 
@@ -139,7 +172,6 @@ async def auto_ack_on_messages_get(ws, channel: Optional[str], thread_id: Option
                 unreads.set_last_read(user_id, latest_id, thread_id=thread_id)
             elif channel:
                 unreads.set_last_read(user_id, latest_id, channel=channel)
-
             await _broadcast_unreads_update(ws, server_data, user_id, channel, thread_id, latest_id)
 
 
@@ -155,7 +187,6 @@ async def _broadcast_unreads_update(ws, server_data, user_id: str, channel: Opti
         "cmd": "unreads_update",
         "last_read": last_read
     }
-
     if thread_id:
         msg["thread_id"] = thread_id
     elif channel:

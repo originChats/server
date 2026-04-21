@@ -107,7 +107,7 @@ ws.onmessage = (event) => {
 - User must be authenticated.
 - User must have `view` permission on the channel/thread.
 - If `last_read` is `null`, all messages are considered unread.
-- Use `unreads_get` to get unread counts for all channels at once.
+- Use `unreads_get` to get unread counts for all channels and threads at once.
 
 ## See Also
 

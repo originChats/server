@@ -471,7 +471,8 @@ ws.send(JSON.stringify({ cmd: 'unreads_get' }));
 //   cmd: 'unreads_get',
 //   unreads: {
 //     'general': { last_read: 'msg_123', unread_count: 5, total_messages: 100 },
-//     'random': { last_read: null, unread_count: 50, total_messages: 50 }
+//     'random': { last_read: null, unread_count: 50, total_messages: 50 },
+//     'thread/550e8400-e29b-41d4-a716-446655440000': { last_read: 'msg_456', unread_count: 3, total_messages: 20, parent_channel: 'general' }
 //   }
 // }
 ```
