@@ -2,6 +2,7 @@ import asyncio
 from urllib.parse import urlparse
 from db import users, roles
 from handlers.messages.helpers import _error, _require_user_id, _require_permission
+from handlers.messages.audit import record
 from handlers.websocket_utils import broadcast_to_all, _get_ws_attr
 from handlers.helpers.validation import (
     require_user_roles as _require_user_roles,
@@ -110,6 +111,7 @@ async def handle_user_update(ws, message, match_cmd, server_data):
             users.set_nickname(target_id, updates["nickname"])
             new_nickname = updates["nickname"]
 
+    record("user_update", ws, target_id=target_id, target_name=target, details=updates)
     await broadcast_to_all(server_data["connected_clients"], {
         "cmd": "user_updated",
         "user_id": target_id,

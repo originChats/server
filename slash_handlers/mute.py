@@ -8,7 +8,7 @@ from slash_handlers.utils import (
     create_mod_response,
     make_command_info
 )
-
+from handlers.messages.audit import record
 
 def get_command_info():
     return make_command_info(
@@ -27,38 +27,38 @@ async def handle(ws, args, channel, server_data):
     target_username = args.get("username")
     duration = args.get("duration")
     reason = args.get("reason", "No reason provided")
-    
+
     if not duration:
         return {"error": "Duration is required"}
-    
+
     try:
         duration = int(duration)
         if duration <= 0:
             return {"error": "Duration must be a positive number"}
     except (ValueError, TypeError):
         return {"error": "Duration must be a valid number"}
-    
+
     target_id, target_user, error = validate_target_user(target_username)
     if error:
         return error
-    
+
     error = check_can_modify_target(target_user, "mute")
     if error:
         return error
-    
+
     if not server_data or not server_data.get("rate_limiter"):
         return {"error": "Rate limiter not available"}
-    
+
     rate_limiter = server_data["rate_limiter"]
     rate_limiter.set_user_timeout(target_id, duration)
-    
+
     connected_clients = server_data.get("connected_clients", set())
     target_ws = None
     for client in connected_clients:
         if _get_ws_attr(client, "user_id") == target_id:
             target_ws = client
             break
-    
+
     if target_ws:
         loop = asyncio.get_event_loop()
         loop.create_task(send_to_client(target_ws, {
@@ -66,7 +66,9 @@ async def handle(ws, args, channel, server_data):
             "reason": f"Muted: {reason}",
             "length": duration * 1000
         }))
-    
+
+    record("user_timeout", ws, target_id=target_id, target_name=target_username,
+           details={"duration": duration, "reason": reason})
     Logger.info(f"User {target_username} muted for {duration}s by slash command. Reason: {reason}")
-    
+
     return create_mod_response("🔇", target_username, f"muted for {duration} seconds", reason)

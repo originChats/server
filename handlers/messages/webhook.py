@@ -1,5 +1,6 @@
 from db import channels, webhooks as webhooks_db
 from handlers.messages.helpers import _error, _require_user_id, _require_permission
+from handlers.messages.audit import record
 import copy
 import uuid
 
@@ -31,6 +32,8 @@ async def handle_webhook_create(ws, message, match_cmd):
     if not webhook:
         return _error("Failed to create webhook", match_cmd)
 
+    record("webhook_create", ws, target_id=webhook.get("id"), target_name=name,
+           details={"channel": channel})
     display_webhook = copy.deepcopy(webhook)
 
     return {"cmd": "webhook_create", "webhook": display_webhook}
@@ -92,6 +95,7 @@ async def handle_webhook_delete(ws, message, match_cmd):
     if not deleted:
         return _error("Failed to delete webhook", match_cmd)
 
+    record("webhook_delete", ws, target_id=webhook_id, target_name=webhook.get("name"))
     return {"cmd": "webhook_delete", "id": webhook_id, "deleted": True}
 
 
@@ -127,6 +131,7 @@ async def handle_webhook_update(ws, message, match_cmd):
     if not updated_webhook:
         return _error("Failed to update webhook", match_cmd)
 
+    record("webhook_update", ws, target_id=webhook_id, target_name=updated_webhook.get("name"), details=updates)
     return {"cmd": "webhook_update", "webhook": updated_webhook}
 
 
@@ -152,6 +157,7 @@ async def handle_webhook_regenerate(ws, message, match_cmd):
     if not updated_webhook:
         return _error("Failed to regenerate webhook token", match_cmd)
 
+    record("webhook_regenerate", ws, target_id=webhook_id, target_name=webhook.get("name"))
     webhook_with_token = webhooks_db.get_webhook(webhook_id)
 
     return {"cmd": "webhook_regenerate", "webhook": webhook_with_token}

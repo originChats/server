@@ -7,7 +7,7 @@ from handlers.auth import handle_authentication, handle_cracked_auth, handle_cra
 from handlers import message as message_handler
 from handlers.rate_limiter import RateLimiter
 from handlers import github_webhook
-from db import serverEmojis, push as push_db, webhooks as webhooks_db, channels, users, roles, attachments as attachments_db, permissions as permissions_db
+from db import serverEmojis, push as push_db, webhooks as webhooks_db, channels, users, roles, attachments as attachments_db, permissions as permissions_db, modlog as modlog_db
 import watchers
 from plugin_manager import PluginManager
 from logger import Logger

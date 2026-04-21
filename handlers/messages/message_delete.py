@@ -1,5 +1,6 @@
 from db import channels, threads, users
 from handlers.websocket_utils import _get_ws_attr
+from handlers.messages.audit import record
 from handlers.helpers.validation import (
     make_error as _error,
     require_user_id as _require_user_id,
@@ -62,6 +63,7 @@ async def handle_message_delete(ws, message, server_data):
             return _error("Failed to delete message", match_cmd)
 
         username = users.get_username_by_id(user_id)
+        record("message_delete", ws, target_id=message_id, details={"channel": parent_channel, "thread_id": thread_id})
         if server_data:
             server_data["plugin_manager"].trigger_event("message_delete", ws, {
                 "channel": parent_channel,
@@ -76,6 +78,7 @@ async def handle_message_delete(ws, message, server_data):
             return _error("Failed to delete message", match_cmd)
 
         username = users.get_username_by_id(user_id)
+        record("message_delete", ws, target_id=message_id, details={"channel": channel_name})
         if server_data:
             server_data["plugin_manager"].trigger_event("message_delete", ws, {
                 "channel": channel_name,

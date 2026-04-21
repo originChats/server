@@ -6,51 +6,24 @@ from . import channels
 
 
 PERMISSIONS = {
-    # Server Management
     "administrator": "Full permissions (bypasses all checks except owner)",
     "manage_server": "Update server settings, emojis, and webhooks",
     "view_audit_log": "View server audit logs",
-
-    # Role Management
     "manage_roles": "Create, delete, and assign roles below own position",
-
-    # Channel Management
     "manage_channels": "Create, delete, and configure channels",
     "manage_threads": "Lock, archive, and delete threads",
-
-    # User Moderation
-    "manage_users": "Ban, unban, timeout, and manage user nicknames",
-    "kick_members": "Kick users from the server",
-    "manage_nicknames": "Change other users' nicknames",
-    "change_nickname": "Change own nickname",
-
-    # Voice Channel
-    "connect": "Connect to voice channels",
-    "speak": "Speak in voice channels",
-    "stream": "Stream video in voice channels",
-    "mute_members": "Mute users in voice channels",
-    "deafen_members": "Deafen users in voice channels",
-    "move_members": "Move users between voice channels",
-    "use_voice_activity": "Use voice activity detection (vs push-to-talk)",
-    "priority_speaker": "Be heard over other speakers in voice channels",
-
-    # Message Management
+    "manage_users": "Ban, unban, timeout, and manage user profiles",
     "manage_messages": "Delete and pin any message across all channels",
     "read_message_history": "View previous messages in channel",
-
-    # Messaging
     "send_messages": "Send messages in text channels",
-    "send_tts": "Send text-to-speech messages",
     "embed_links": "Embed links in messages",
     "attach_files": "Attach files to messages",
     "add_reactions": "Add reactions to messages",
     "external_emojis": "Use external/custom emojis",
-
-    # Invites
-    "create_invite": "Create channel invites",
-    "manage_invites": "Manage and revoke invites",
-
-    # Special
+    "connect": "Connect to voice channels",
+    "speak": "Speak in voice channels",
+    "stream": "Stream video in voice channels",
+    "use_voice_activity": "Use voice activity detection",
     "mention_everyone": "Mention the @everyone role",
     "use_slash_commands": "Use slash commands in chat",
 }

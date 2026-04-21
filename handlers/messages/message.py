@@ -228,20 +228,35 @@ async def handle_typing(ws, message, server_data):
             return {"cmd": "rate_limit", "reason": reason, "length": int(wait_time * 1000)}
 
     channel_name = message.get("channel")
-    if not channel_name:
-        return _error("Channel name not provided", match_cmd)
-
-    if not channels.channel_exists(channel_name):
-        return _error("Channel not found", match_cmd)
+    thread_id = message.get("thread_id")
+    
+    if not channel_name and not thread_id:
+        return _error("Channel name or thread_id not provided", match_cmd)
 
     user_data = users.get_user(user_id)
     if not user_data:
         return _error("User not found", match_cmd)
 
-    allowed_channels = channels.get_all_channels_for_roles(user_data.get("roles", []))
+    user_roles = user_data.get("roles", [])
+    allowed_channels = channels.get_all_channels_for_roles(user_roles)
     allowed_text_channel_names = [c.get("name") for c in allowed_channels if c.get("type") == "text"]
-    if channel_name not in allowed_text_channel_names:
-        return _error("Access denied to this channel", match_cmd)
+
+    effective_channel = channel_name
+    if thread_id:
+        thread_data = threads.get_thread(thread_id)
+        if not thread_data:
+            return _error("Thread not found", match_cmd)
+        parent_channel = thread_data.get("parent_channel")
+        if not parent_channel:
+            return _error("Thread has no parent channel", match_cmd)
+        if not channels.does_user_have_permission(parent_channel, user_roles, "send"):
+            return _error("You do not have permission to send messages in this thread", match_cmd)
+        effective_channel = parent_channel
+    else:
+        if not channels.channel_exists(channel_name):
+            return _error("Channel not found", match_cmd)
+        if channel_name not in allowed_text_channel_names:
+            return _error("Access denied to this channel", match_cmd)
 
     username = users.get_username_by_id(user_id)
-    return {"cmd": "typing", "channel": channel_name, "user": username, "global": True}
+    return {"cmd": "typing", "channel": effective_channel, "user": username, "thread_id": thread_id if thread_id else None, "global": True}

@@ -23,3 +23,40 @@ PNG_COMPRESSION = 6
 
 UNREFERENCED_ATTACHMENT_HOURS = 1
 SIX_MONTHS_SECONDS = 6 * 30 * 24 * 60 * 60
+
+AUDIT_CATEGORIES: dict[str, str] = {
+    "user_ban": "user_moderation",
+    "user_unban": "user_moderation",
+    "user_timeout": "user_moderation",
+    "user_roles_set": "user_moderation",
+    "user_update": "user_moderation",
+
+    "role_create": "role_management",
+    "role_update": "role_management",
+    "role_delete": "role_management",
+    "role_reorder": "role_management",
+    "role_permissions_set": "role_management",
+    "self_role_add": "role_management",
+    "self_role_remove": "role_management",
+
+    "channel_create": "channel_management",
+    "channel_update": "channel_management",
+    "channel_move": "channel_management",
+    "channel_delete": "channel_management",
+
+    "message_delete": "message_moderation",
+    "message_pin": "message_moderation",
+    "message_unpin": "message_moderation",
+
+    "server_update": "server_management",
+    "emoji_add": "server_management",
+    "emoji_update": "server_management",
+    "emoji_delete": "server_management",
+    "webhook_create": "server_management",
+    "webhook_update": "server_management",
+    "webhook_delete": "server_management",
+    "webhook_regenerate": "server_management",
+    "plugins_reload": "server_management",
+}
+
+FALLBACK_RETENTION_DAYS = 90

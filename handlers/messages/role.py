@@ -1,5 +1,6 @@
 from db import roles, users, channels, permissions
 from handlers.messages.helpers import _error, _require_user_id, _require_permission, _require_can_manage_role
+from handlers.messages.audit import record
 from handlers.websocket_utils import broadcast_to_all
 
 
@@ -35,6 +36,8 @@ async def handle_role_create(ws, message, match_cmd, server_data):
         return _error("Role already exists", match_cmd)
 
     role_id = roles.add_role(role_name, role_data)
+    record("role_create", ws, target_id=role_id, target_name=role_name,
+           details={"color": message.get("color"), "permissions": message.get("permissions")})
     if server_data:
         server_data["plugin_manager"].trigger_event("role_create", ws, {
             "role_id": role_id,
@@ -42,12 +45,10 @@ async def handle_role_create(ws, message, match_cmd, server_data):
             "description": message.get("description", ""),
             "color": message.get("color")
         }, server_data)
-
-    await broadcast_to_all(server_data["connected_clients"], {
-        "cmd": "roles_list",
-        "roles": roles.get_all_roles()
-    }, server_data)
-
+        await broadcast_to_all(server_data["connected_clients"], {
+            "cmd": "roles_list",
+            "roles": roles.get_all_roles()
+        }, server_data)
     return {"cmd": "role_create", "id": role_id, "name": role_name}
 
 
@@ -69,6 +70,7 @@ async def handle_role_reorder(ws, message, match_cmd, server_data):
     if not roles.reorder_roles(role_order):
         return _error("Failed to reorder roles", match_cmd)
 
+    record("role_reorder", ws, details={"roles": role_order})
     await broadcast_to_all(server_data["connected_clients"], {
         "cmd": "roles_list",
         "roles": roles.get_all_roles()
@@ -128,6 +130,8 @@ async def handle_role_update(ws, message, match_cmd, server_data):
         role_data["category"] = message["category"]
 
     updated = roles.update_role(role_id_or_name, role_data)
+    record("role_update", ws, target_id=role_data.get("id"), target_name=role_data.get("name"),
+           details={"color": role_data.get("color"), "permissions": role_data.get("permissions")})
     if server_data:
         server_data["plugin_manager"].trigger_event("role_update", ws, {
             "role_id": role_data.get("id"),
@@ -135,12 +139,10 @@ async def handle_role_update(ws, message, match_cmd, server_data):
             "description": role_data.get("description", ""),
             "color": role_data.get("color")
         }, server_data)
-
-    await broadcast_to_all(server_data["connected_clients"], {
-        "cmd": "roles_list",
-        "roles": roles.get_all_roles()
-    }, server_data)
-
+        await broadcast_to_all(server_data["connected_clients"], {
+            "cmd": "roles_list",
+            "roles": roles.get_all_roles()
+        }, server_data)
     return {"cmd": "role_update", "id": role_data.get("id"), "name": role_data.get("name"), "updated": updated}
 
 
@@ -173,6 +175,8 @@ async def handle_role_set(ws, message, match_cmd, server_data):
     if not role:
         return _error("Role not found after update", match_cmd)
 
+    record("role_update", ws, target_id=role.get("id"), target_name=role.get("name"),
+           details=role_data)
     if server_data:
         server_data["plugin_manager"].trigger_event("role_update", ws, {
             "role_id": role.get("id"),
@@ -180,12 +184,10 @@ async def handle_role_set(ws, message, match_cmd, server_data):
             "description": role_data.get("description", ""),
             "color": role_data.get("color")
         }, server_data)
-
-    await broadcast_to_all(server_data["connected_clients"], {
-        "cmd": "roles_list",
-        "roles": roles.get_all_roles()
-    }, server_data)
-
+        await broadcast_to_all(server_data["connected_clients"], {
+            "cmd": "roles_list",
+            "roles": roles.get_all_roles()
+        }, server_data)
     return {"cmd": "role_set", "id": role.get("id"), "name": role.get("name"), "updated": updated}
 
 
@@ -224,17 +226,16 @@ async def handle_role_delete(ws, message, match_cmd, server_data):
     users.remove_role_from_all_users(role_name)
 
     deleted = roles.delete_role(role_id_or_name)
+    record("role_delete", ws, target_id=role.get("id"), target_name=role_name)
     if server_data:
         server_data["plugin_manager"].trigger_event("role_delete", ws, {
             "role_id": role.get("id"),
             "role_name": role_name
         }, server_data)
-
-    await broadcast_to_all(server_data["connected_clients"], {
-        "cmd": "roles_list",
-        "roles": roles.get_all_roles()
-    }, server_data)
-
+        await broadcast_to_all(server_data["connected_clients"], {
+            "cmd": "roles_list",
+            "roles": roles.get_all_roles()
+        }, server_data)
     return {"cmd": "role_delete", "id": role.get("id"), "name": role_name, "deleted": deleted}
 
 
@@ -276,6 +277,8 @@ def handle_role_permissions_set(ws, message, match_cmd):
     role_data["permissions"] = perms
     updated = roles.update_role(role_id_or_name, role_data)
 
+    record("role_permissions_set", ws, target_id=role_data.get("id"), target_name=role_data.get("name"),
+           details={"permissions": perms})
     return {"cmd": "role_permissions_set", "id": role_data.get("id"), "name": role_data.get("name"), "permissions": perms, "updated": updated}
 
 

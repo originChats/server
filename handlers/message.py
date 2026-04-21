@@ -11,6 +11,7 @@ from handlers.messages.rate_limit import handle_rate_limit_status, handle_rate_l
 from handlers.messages.status import handle_status_set, handle_status_get
 from handlers.messages.reaction import handle_react_add, handle_react_remove
 from handlers.messages.user import handle_user_update, handle_pfp_set, handle_pfp_get
+from handlers.messages.modlog import handle_modlog_get, handle_modlog_summary
 from handlers.messages.server import handle_server_update, handle_server_info
 from handlers.messages.poll import handle_poll_create, handle_poll_vote, handle_poll_end, handle_poll_results, handle_poll_get
 from handlers.messages.helpers import _require_permission
@@ -20,9 +21,12 @@ from handlers.messages.message_delete import handle_message_delete
 from handlers.messages.message_pin import handle_message_pin, handle_message_unpin, handle_messages_pinned
 from handlers.messages.messages import handle_messages_get, handle_messages_around, handle_messages_search, handle_message_get, handle_message_replies
 from handlers.messages.unreads import handle_unreads_ack, handle_unreads_get, handle_unreads_count
+from db import modlog
+from handlers.messages.audit import record
 from logger import Logger
 from handlers.websocket_utils import broadcast_to_voice_channel_with_viewers, broadcast_to_all, _get_ws_attr, _set_ws_attr
 from handlers import push as push_handler
+from config_store import get_config_value
 from handlers.helpers.validation import (
     make_error as _error,
     require_user_id as _require_user_id,
@@ -233,6 +237,10 @@ async def handle(ws, message, server_data: dict) -> dict | None:
             return await handle_poll_results(ws, message, match_cmd)
         case "poll_get":
             return await handle_poll_get(ws, message, match_cmd)
+        case "modlog_get":
+            return handle_modlog_get(ws, message, match_cmd)
+        case "modlog_summary":
+            return handle_modlog_summary(ws, message, match_cmd)
         case "pfp_set":
             return await handle_pfp_set(ws, message, server_data)
         case "pfp_get":
@@ -282,6 +290,7 @@ async def _handle_user_timeout(ws, message, match_cmd, server_data):
                 "user_id": target_id, "username": users.get_username_by_id(target_id),
                 "timeout": timeout * 1000,
             }, server_data)
+    record("user_timeout", ws, target_id=target_id, target_name=target, details={"timeout": timeout})
     return {"cmd": "user_timeout", "user": target, "timeout": timeout}
 
 
@@ -299,6 +308,7 @@ def _handle_user_ban(ws, message, match_cmd, server_data):
 
     target_id = users.get_id_by_username(target) or target
     banned = users.ban_user(target_id)
+    record("user_ban", ws, target_id=target_id, target_name=target)
     if server_data:
         server_data["plugin_manager"].trigger_event("user_ban", ws, {
             "user_id": target_id, "username": users.get_username_by_id(target_id)
@@ -320,6 +330,7 @@ def _handle_user_unban(ws, message, match_cmd, server_data):
 
     target_id = users.get_id_by_username(target) or target
     unbanned = users.unban_user(target_id)
+    record("user_unban", ws, target_id=target_id, target_name=target)
     if server_data:
         server_data["plugin_manager"].trigger_event("user_unban", ws, {
             "user_id": target_id, "username": users.get_username_by_id(target_id)
@@ -417,9 +428,11 @@ def _handle_plugins_reload(ws, message, match_cmd, server_data):
     if plugin_name:
         success = server_data["plugin_manager"].reload_plugin(plugin_name)
         if success:
+            record("plugins_reload", ws, details={"plugin": plugin_name})
             return {"cmd": "plugins_reload", "val": f"Plugin '{plugin_name}' reloaded successfully"}
         return _error(f"Failed to reload plugin '{plugin_name}'", match_cmd)
     server_data["plugin_manager"].reload_all_plugins()
+    record("plugins_reload", ws, details={"plugin": "all"})
     return {"cmd": "plugins_reload", "val": "All plugins reloaded successfully"}
 
 
@@ -552,6 +565,7 @@ async def _handle_user_roles_set(ws, message, match_cmd, server_data):
     updated_user = users.get_user(target_id)
     username = users.get_username_by_id(target_id)
     color = roles.get_user_color(roles_to_set)
+    record("user_roles_set", ws, target_id=target_id, target_name=username, details={"roles": roles_to_set})
     if server_data:
         server_data["plugin_manager"].trigger_event("user_roles_set", ws, {
             "user_id": target_id, "username": username, "roles": roles_to_set

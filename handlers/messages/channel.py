@@ -1,6 +1,6 @@
 from db import channels, users, threads
 from handlers.messages.helpers import _error, _require_user_id, _require_permission
-
+from handlers.messages.audit import record
 
 def handle_channels_get(ws, message, match_cmd, server_data):
     user_id, error = _require_user_id(ws)
@@ -74,6 +74,8 @@ def handle_channel_create(ws, message, match_cmd, server_data):
 
     if created:
         channel_data = channels.get_channel(channel_name)
+        record("channel_create", ws, target_id=channel_name, target_name=channel_name,
+               details={"type": channel_type})
         if server_data:
             server_data["plugin_manager"].trigger_event("channel_create", ws, {
                 "channel": channel_data
@@ -112,6 +114,8 @@ def handle_channel_update(ws, message, match_cmd, server_data):
     updated = channels.update_channel(current_name, updates)
     if updated:
         channel = channels.get_channel(updates.get("name", current_name))
+        record("channel_update", ws, target_id=current_name, target_name=updates.get("name", current_name),
+               details=updates)
         if server_data:
             server_data["plugin_manager"].trigger_event("channel_update", ws, {
                 "old_name": current_name,
@@ -144,6 +148,8 @@ def handle_channel_move(ws, message, match_cmd, server_data):
     moved = channels.reorder_channel(channel_name, new_position)
     if server_data and moved:
         channel = channels.get_channel(channel_name)
+        record("channel_move", ws, target_id=channel_name, target_name=channel_name,
+               details={"position": new_position})
         server_data["plugin_manager"].trigger_event("channel_move", ws, {
             "channel": channel,
             "position": new_position
@@ -176,6 +182,7 @@ def handle_channel_delete(ws, message, match_cmd, server_data):
 
     deleted = channels.delete_channel(channel_name)
     if server_data and deleted:
+        record("channel_delete", ws, target_id=channel_name, target_name=channel_name)
         server_data["plugin_manager"].trigger_event("channel_delete", ws, {
             "channel_name": channel_name
         }, server_data)

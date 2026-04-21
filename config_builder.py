@@ -34,6 +34,17 @@ DEFAULT_CONFIG = {
         "burst_limit": 10,
         "cooldown_seconds": 30,
     },
+    "modlog": {
+        "enabled": True,
+        "retention": {
+            "default": 90,
+            "user_moderation": 365,
+            "role_management": 365,
+            "channel_management": 180,
+            "message_moderation": 90,
+            "server_management": 180,
+        },
+    },
     "DB": {
         "channels": "db/channels.json",
         "users": {

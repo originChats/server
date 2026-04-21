@@ -1,5 +1,6 @@
 from db import roles, users
 from handlers.messages.helpers import _error, _require_user_id
+from handlers.messages.audit import record
 from handlers.websocket_utils import broadcast_to_all
 
 
@@ -30,6 +31,7 @@ async def handle_self_role_add(ws, message, match_cmd, server_data):
     updated_roles = users.get_user_roles(user_id)
     color = roles.get_user_color(updated_roles)
 
+    record("self_role_add", ws, target_id=user_id, target_name=username, details={"role": role_name})
     if server_data:
         server_data["plugin_manager"].trigger_event("self_role_add", ws, {
             "user_id": user_id,
@@ -78,6 +80,7 @@ async def handle_self_role_remove(ws, message, match_cmd, server_data):
     updated_roles = users.get_user_roles(user_id)
     color = roles.get_user_color(updated_roles)
 
+    record("self_role_remove", ws, target_id=user_id, target_name=username, details={"role": role_name})
     if server_data:
         server_data["plugin_manager"].trigger_event("self_role_remove", ws, {
             "user_id": user_id,

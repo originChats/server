@@ -1,5 +1,6 @@
 from db import server_config
 from handlers.messages.helpers import _error, _require_user_id, _require_permission
+from handlers.messages.audit import record
 from handlers.websocket_utils import broadcast_to_all
 
 
@@ -43,6 +44,7 @@ async def handle_server_update(ws, message, match_cmd, server_data):
         banner=updates.get("banner")
     )
 
+    record("server_update", ws, details=updates)
     server_data["config"] = server_config.get_server_config()
 
     await broadcast_to_all(server_data["connected_clients"], {

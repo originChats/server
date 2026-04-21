@@ -2,7 +2,7 @@ from db import serverEmojis
 from pydantic import ValidationError
 from schemas.server_emoji_schema import Emoji_add, Emoji_delete, Emoji_get_all, Emoji_update, Emoji_get_filename, Emoji_get_id
 from handlers.messages.helpers import _error, _require_user_id, _require_permission
-
+from handlers.messages.audit import record
 
 async def handle_emoji_add(ws, message, match_cmd):
     user_id, error = _require_user_id(ws, "Authentication required")
@@ -16,6 +16,7 @@ async def handle_emoji_add(ws, message, match_cmd):
         emoji_add_command = Emoji_add.model_validate(message)
         emoji_id = serverEmojis.add_emoji(emoji_add_command.name, emoji_add_command.image)
         if emoji_id:
+            record("emoji_add", ws, target_id=str(emoji_id), target_name=emoji_add_command.name)
             return {"cmd": "emoji_add", "id": emoji_id, "added": True}
         else:
             return _error("Error adding emoji", match_cmd)
@@ -34,6 +35,7 @@ def handle_emoji_delete(ws, message, match_cmd):
     try:
         emoji_delete_command = Emoji_delete.model_validate(message)
         deleted = serverEmojis.remove_emoji(emoji_delete_command.emoji_id, True)
+        record("emoji_delete", ws, target_id=str(emoji_delete_command.emoji_id))
         return {"cmd": "emoji_delete", "id": emoji_delete_command.emoji_id, "deleted": deleted}
     except ValidationError as e:
         return _error(f"Invalid emoji_delete command scheme: {str(e)}", match_cmd)
@@ -72,6 +74,7 @@ async def handle_emoji_update(ws, message, match_cmd):
             return _error("At least one field to update is required (name or image)", match_cmd)
 
         updated = serverEmojis.update_emoji(emoji_update_command.emoji_id, updates)
+        record("emoji_update", ws, target_id=str(emoji_update_command.emoji_id), details=updates)
         return {"cmd": "emoji_update", "id": emoji_update_command.emoji_id, "updated": updated}
     except ValidationError as e:
         return _error(f"Invalid emoji_update command scheme: {str(e)}", match_cmd)
