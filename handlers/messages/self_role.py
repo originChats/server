@@ -110,10 +110,14 @@ async def handle_self_roles_list(ws, message, match_cmd):
     self_assignable_roles = roles.get_self_assignable_roles()
     user_roles = users.get_user_roles(user_id)
 
-    for role in self_assignable_roles:
-        role["assigned"] = role["name"] in user_roles
+    role_list = []
+    for role_data in self_assignable_roles.values():
+        role_list.append({
+            **role_data,
+            "assigned": role_data["name"] in user_roles
+        })
 
     return {
         "cmd": "self_roles_list",
-        "roles": self_assignable_roles
+        "roles": role_list
     }
